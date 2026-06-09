@@ -1,7 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { apiConfig, config, progress, settings, taskRunning, editingCharID, editingWvID, wvFilter, addToast } from '../lib/stores.js';
+  import { apiConfig, config, progress, settings, editingCharID, editingWvID, wvFilter, addToast, showConfirm, taskRunning } from '../lib/stores.js';
+
+  export let sendToChat = async () => {};
 
   let showCharForm = false;
   let showWvForm = false;
@@ -10,8 +12,6 @@
 
   let charName = '', charAge = '', charAppearance = '', charPersonality = '', charBackground = '', charMotivation = '', charAbilities = '', charNotes = '';
   let wvName = '', wvCategory = 'other', wvDescription = '', wvTags = '';
-
-  let polishingField = '';
 
   $: cfgBase = $apiConfig?.base_url || '';
   $: cfgModel = $apiConfig?.model || '';
@@ -63,18 +63,18 @@
     } catch (e) { addToast(e.message, 'error'); }
   }
 
-  async function saveStoryConfig() {
-    const cfg = { story: { ...localStoryCfg }, prompts: {}, skill_config: $config?.skill_config || null };
-    try {
-      await api('PUT', '/api/config', cfg);
-      config.set(cfg);
-      if (hasAccepted) {
-        addToast('设定已保存，正在自动协调已有内容...', 'info');
-        try { await api('POST', '/api/settings/reconcile', cfg.story); } catch (e) { addToast('协调请求失败: ' + e.message, 'error'); }
-      } else {
-        addToast('故事配置已保存', 'success');
-      }
-    } catch (e) { addToast(e.message, 'error'); }
+  async function submitStoryConfig() {
+    const fields = [];
+    if (localStoryCfg.type) fields.push(`- 故事类型: ${localStoryCfg.type}`);
+    if (localStoryCfg.title) fields.push(`- 标题: ${localStoryCfg.title}`);
+    if (localStoryCfg.chapter_count) fields.push(`- 章节数: ${localStoryCfg.chapter_count}`);
+    if (localStoryCfg.target_words_per_chapter) fields.push(`- 每章字数: ${localStoryCfg.target_words_per_chapter}`);
+    if (localStoryCfg.writing_style) fields.push(`- 写作风格: ${localStoryCfg.writing_style}`);
+    if (localStoryCfg.story_synopsis) fields.push(`- 故事梗概: ${localStoryCfg.story_synopsis}`);
+
+    const msg = `请更新以下故事配置:\n${fields.join('\n')}`;
+    await sendToChat(msg);
+    addToast('已提交到 AI 助理', 'success');
   }
 
   function openCharForm(char) {
@@ -116,12 +116,20 @@
   }
 
   async function deleteCharacter(id) {
-    if (!confirm('确认删除此角色？')) return;
-    try {
-      await api('DELETE', '/api/characters/' + id);
-      addToast('角色已删除', 'success');
-      settings.set(await api('GET', '/api/settings'));
-    } catch (e) { addToast(e.message, 'error'); }
+    showConfirm('确认删除此角色？', async () => {
+      try {
+        await api('DELETE', '/api/characters/' + id);
+        addToast('角色已删除', 'success');
+        settings.set(await api('GET', '/api/settings'));
+      } catch (e) { addToast(e.message, 'error'); }
+    });
+  }
+
+  async function submitCharacters() {
+    if (chars.length === 0) { addToast('暂无角色可提交', 'error'); return; }
+    const lines = chars.map(c => `- ${c.name}${c.age ? '，' + c.age : ''}${c.personality ? '，' + c.personality : ''}`);
+    await sendToChat(`请查看以下角色设定（共 ${chars.length} 个）：\n${lines.join('\n')}\n请使用 read_characters 工具获取详细信息。`);
+    addToast('角色设定已提交到 AI', 'success');
   }
 
   function openWvForm(item) {
@@ -159,98 +167,20 @@
   }
 
   async function deleteWorldview(id) {
-    if (!confirm('确认删除此世界观条目？')) return;
-    try {
-      await api('DELETE', '/api/worldview/' + id);
-      addToast('世界观条目已删除', 'success');
-      settings.set(await api('GET', '/api/settings'));
-    } catch (e) { addToast(e.message, 'error'); }
-  }
-
-  async function aiGenerateSettings() {
-    try {
-      await api('POST', '/api/settings/ai-generate');
-      addToast('AI 设定生成中...', 'info');
-    } catch (e) { addToast(e.message, 'error'); }
-  }
-
-  async function polishField(fieldType) {
-    if ($taskRunning) { addToast('有任务正在运行，请等待完成', 'error'); return; }
-    polishingField = fieldType;
-
-    let content = '';
-    if (fieldType === 'character') {
-      const parts = [];
-      if (charName.trim()) parts.push(`名称: ${charName}`);
-      if (charAge.trim()) parts.push(`年龄: ${charAge}`);
-      if (charAppearance.trim()) parts.push(`外貌: ${charAppearance}`);
-      if (charPersonality.trim()) parts.push(`性格: ${charPersonality}`);
-      if (charBackground.trim()) parts.push(`背景: ${charBackground}`);
-      if (charMotivation.trim()) parts.push(`动机: ${charMotivation}`);
-      if (charAbilities.trim()) parts.push(`能力: ${charAbilities}`);
-      if (charNotes.trim()) parts.push(`备注: ${charNotes}`);
-      content = parts.join('\n');
-    } else if (fieldType === 'worldview') {
-      const parts = [];
-      if (wvName.trim()) parts.push(`名称: ${wvName}`);
-      parts.push(`分类: ${catLabels[wvCategory] || wvCategory}`);
-      if (wvDescription.trim()) parts.push(`描述: ${wvDescription}`);
-      if (wvTags.trim()) parts.push(`标签: ${wvTags}`);
-      content = parts.join('\n');
-    } else if (fieldType === 'writing_style') {
-      content = localStoryCfg.writing_style || '';
-    } else if (fieldType === 'story_synopsis') {
-      content = localStoryCfg.story_synopsis || '';
-    }
-
-    try {
-      const resp = await api('POST', '/api/settings/polish', { field_type: fieldType, content });
-      addToast('AI 润色中...', 'info');
-    } catch (e) {
-      polishingField = '';
-      addToast(e.message, 'error');
-    }
-  }
-
-  if (typeof window !== 'undefined') {
-    window.addEventListener('settings_polish_result', (e) => {
-      const { field_type, text } = e.detail;
-      polishingField = '';
-
-      if (field_type === 'writing_style') {
-        localStoryCfg.writing_style = text;
-        addToast('写作风格已润色', 'success');
-      } else if (field_type === 'story_synopsis') {
-        localStoryCfg.story_synopsis = text;
-        addToast('故事梗概已润色', 'success');
-      } else if (field_type === 'character') {
-        try {
-          const obj = JSON.parse(text);
-          if (obj.name) charName = obj.name;
-          if (obj.age) charAge = obj.age;
-          if (obj.appearance) charAppearance = obj.appearance;
-          if (obj.personality) charPersonality = obj.personality;
-          if (obj.background) charBackground = obj.background;
-          if (obj.motivation) charMotivation = obj.motivation;
-          if (obj.abilities) charAbilities = obj.abilities;
-          if (obj.notes) charNotes = obj.notes;
-          addToast('角色已润色', 'success');
-        } catch {
-          addToast('AI 润色完成，但返回格式异常，请手动查看', 'warn');
-        }
-      } else if (field_type === 'worldview') {
-        try {
-          const obj = JSON.parse(text);
-          if (obj.name) wvName = obj.name;
-          if (obj.category) wvCategory = obj.category;
-          if (obj.description) wvDescription = obj.description;
-          if (obj.tags) wvTags = obj.tags;
-          addToast('世界观已润色', 'success');
-        } catch {
-          addToast('AI 润色完成，但返回格式异常，请手动查看', 'warn');
-        }
-      }
+    showConfirm('确认删除此世界观条目？', async () => {
+      try {
+        await api('DELETE', '/api/worldview/' + id);
+        addToast('世界观条目已删除', 'success');
+        settings.set(await api('GET', '/api/settings'));
+      } catch (e) { addToast(e.message, 'error'); }
     });
+  }
+
+  async function submitWorldview() {
+    if (allWvs.length === 0) { addToast('暂无世界观条目可提交', 'error'); return; }
+    const lines = allWvs.map(w => `- [${catLabels[w.category] || w.category}] ${w.name}: ${w.description.slice(0, 50)}`);
+    await sendToChat(`请查看以下世界观设定（共 ${allWvs.length} 条）：\n${lines.join('\n')}\n请使用 read_worldview 工具获取详细信息。`);
+    addToast('世界观设定已提交到 AI', 'success');
   }
 </script>
 
@@ -259,59 +189,59 @@
   <div class="grid grid-cols-2 gap-3">
     <div class="card bg-base-200 shadow-sm">
       <div class="card-body p-4 gap-2">
-        <h3 class="card-title text-sm">API 配置</h3>
+        <h3 class="card-title text-base">API 配置</h3>
         <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <div class="col-span-2">
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">API Base URL</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">API Base URL</label>
             <input type="text" class="input input-sm w-full" bind:value={localApiCfg.base_url} placeholder="https://api.example.com/v1/" />
           </div>
           <div>
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">Model</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">Model</label>
             <input type="text" class="input input-sm w-full" bind:value={localApiCfg.model} placeholder="gpt-4" />
           </div>
           <div>
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">HTTP 超时（秒）</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">HTTP 超时（秒）</label>
             <input type="number" class="input input-sm w-full" bind:value={localApiCfg.http_timeout_seconds} />
           </div>
           <div class="col-span-2">
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">API Key</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">API Key</label>
             <input type="password" class="input input-sm w-full" bind:value={localApiCfg.api_key} placeholder="sk-..." />
           </div>
         </div>
         <div class="flex justify-end">
-          <button class="btn btn-primary btn-xs" on:click={saveAPIConfig}>保存</button>
+          <button class="btn btn-primary btn-xs" on:click={saveAPIConfig} disabled={$taskRunning}>保存</button>
         </div>
       </div>
     </div>
 
     <div class="card bg-base-200 shadow-sm">
       <div class="card-body p-4 gap-2">
-        <h3 class="card-title text-sm">故事配置</h3>
+        <h3 class="card-title text-base">故事配置</h3>
         {#if hasAccepted}
           <div class="alert alert-warning text-xs py-1.5 px-3">
-            <span>已有已确认章节，保存后将自动协调设定兼容性。</span>
+            <span>已有已确认章节，提交后将自动协调设定兼容性。</span>
           </div>
         {/if}
         <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
           <div>
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">故事类型</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">故事类型</label>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.type} placeholder="奇幻/都市/科幻..." />
           </div>
           <div>
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">小说标题（留空由 AI 生成）</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">小说标题（留空由 AI 生成）</label>
             <input type="text" class="input input-sm w-full" bind:value={localStoryCfg.title} placeholder="留空则 AI 自动生成" />
           </div>
           <div>
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">章节数量</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">章节数量</label>
             <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.chapter_count} />
           </div>
           <div>
-            <label class="text-[11px] text-base-content/50 mb-0.5 block">每章目标字数</label>
+            <label class="text-xs text-base-content/50 mb-0.5 block">每章目标字数</label>
             <input type="number" class="input input-sm w-full" bind:value={localStoryCfg.target_words_per_chapter} />
           </div>
         </div>
         <div class="flex justify-end">
-          <button class="btn btn-primary btn-xs" on:click={saveStoryConfig}>保存</button>
+          <button class="btn btn-accent btn-xs" on:click={submitStoryConfig} disabled={$taskRunning}>手动提交</button>
         </div>
       </div>
     </div>
@@ -320,26 +250,22 @@
   <!-- Writing Style -->
   <div class="card bg-base-200 shadow-sm">
     <div class="card-body p-4 gap-2">
-      <div class="flex items-center justify-between">
-        <h3 class="card-title text-sm">写作风格</h3>
-        <button class="btn btn-accent btn-xs" class:loading={polishingField === 'writing_style'} disabled={polishingField !== ''} on:click={() => polishField('writing_style')}>
-          {polishingField === 'writing_style' ? '润色中...' : 'AI 润色'}
-        </button>
+      <h3 class="card-title text-base">写作风格</h3>
+      <textarea class="textarea w-full h-40 text-base" bind:value={localStoryCfg.writing_style} placeholder="描述你期望的写作风格..."></textarea>
+      <div class="flex justify-end">
+        <button class="btn btn-accent btn-xs" on:click={() => sendToChat('请更新写作风格:\n' + localStoryCfg.writing_style)} disabled={$taskRunning}>手动提交</button>
       </div>
-      <textarea class="textarea w-full h-40 text-sm" bind:value={localStoryCfg.writing_style} placeholder="描述你期望的写作风格..."></textarea>
     </div>
   </div>
 
   <!-- Story Synopsis -->
   <div class="card bg-base-200 shadow-sm">
     <div class="card-body p-4 gap-2">
-      <div class="flex items-center justify-between">
-        <h3 class="card-title text-sm">故事梗概</h3>
-        <button class="btn btn-accent btn-xs" class:loading={polishingField === 'story_synopsis'} disabled={polishingField !== ''} on:click={() => polishField('story_synopsis')}>
-          {polishingField === 'story_synopsis' ? '润色中...' : 'AI 润色'}
-        </button>
+      <h3 class="card-title text-base">故事梗概</h3>
+      <textarea class="textarea w-full h-40 text-base" bind:value={localStoryCfg.story_synopsis} placeholder="可包含：故事主线走向、核心冲突、关键转折点..."></textarea>
+      <div class="flex justify-end">
+        <button class="btn btn-accent btn-xs" on:click={() => sendToChat('请更新故事梗概:\n' + localStoryCfg.story_synopsis)} disabled={$taskRunning}>手动提交</button>
       </div>
-      <textarea class="textarea w-full h-40 text-sm" bind:value={localStoryCfg.story_synopsis} placeholder="可包含：故事主线走向、核心冲突、关键转折点..."></textarea>
     </div>
   </div>
 
@@ -349,7 +275,7 @@
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center cursor-pointer select-none" on:click={() => charCollapse = !charCollapse}>
-        <h3 class="card-title text-sm">角色管理 <span class="text-xs font-normal text-base-content/40">({chars.length})</span></h3>
+        <h3 class="card-title text-base">角色管理 <span class="text-xs font-normal text-base-content/40">({chars.length})</span></h3>
         <svg class="w-4 h-4 text-base-content/40 transition-transform" class:rotate-180={charCollapse} viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
       </div>
       {#if !charCollapse}
@@ -362,11 +288,11 @@
                 <div class="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold shrink-0">{c.name[0]}</div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate">{c.name}</div>
-                  <div class="text-[11px] text-base-content/40 line-clamp-1">{c.personality || c.background || c.age || ''}</div>
+                  <div class="text-xs text-base-content/40 line-clamp-1">{c.personality || c.background || c.age || ''}</div>
                 </div>
                 <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                  <button class="btn btn-ghost btn-xs px-1" on:click={() => openCharForm(c)}>编辑</button>
-                  <button class="btn btn-ghost btn-xs px-1 text-error" on:click={() => deleteCharacter(c.id)}>删除</button>
+                  <button class="btn btn-ghost btn-xs px-1" on:click={() => openCharForm(c)} disabled={$taskRunning}>编辑</button>
+                  <button class="btn btn-ghost btn-xs px-1 text-error" on:click={() => deleteCharacter(c.id)} disabled={$taskRunning}>删除</button>
                 </div>
               </div>
             {/each}
@@ -377,53 +303,52 @@
           <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">名称</label>
+                <label class="text-xs text-base-content/50 mb-0.5 block">名称</label>
                 <input type="text" class="input input-sm w-full" bind:value={charName} />
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">年龄</label>
+                <label class="text-xs text-base-content/50 mb-0.5 block">年龄</label>
                 <input type="text" class="input input-sm w-full" bind:value={charAge} />
               </div>
             </div>
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">外貌</label>
-                <textarea class="textarea textarea-sm w-full h-14" bind:value={charAppearance}></textarea>
+                <label class="text-xs text-base-content/50 mb-0.5 block">外貌</label>
+                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charAppearance}></textarea>
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">性格</label>
-                <textarea class="textarea textarea-sm w-full h-14" bind:value={charPersonality}></textarea>
+                <label class="text-xs text-base-content/50 mb-0.5 block">性格</label>
+                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charPersonality}></textarea>
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">背景</label>
-                <textarea class="textarea textarea-sm w-full h-14" bind:value={charBackground}></textarea>
+                <label class="text-xs text-base-content/50 mb-0.5 block">背景</label>
+                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charBackground}></textarea>
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">动机</label>
-                <textarea class="textarea textarea-sm w-full h-14" bind:value={charMotivation}></textarea>
+                <label class="text-xs text-base-content/50 mb-0.5 block">动机</label>
+                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charMotivation}></textarea>
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">能力</label>
-                <textarea class="textarea textarea-sm w-full h-14" bind:value={charAbilities}></textarea>
+                <label class="text-xs text-base-content/50 mb-0.5 block">能力</label>
+                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charAbilities}></textarea>
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">备注</label>
-                <textarea class="textarea textarea-sm w-full h-14" bind:value={charNotes}></textarea>
+                <label class="text-xs text-base-content/50 mb-0.5 block">备注</label>
+                <textarea class="textarea textarea-sm w-full h-14 text-sm" bind:value={charNotes}></textarea>
               </div>
             </div>
             <div class="flex gap-1.5">
-              <button class="btn btn-success btn-xs" on:click={saveCharacter}>保存角色</button>
-              <button class="btn btn-accent btn-xs" class:loading={polishingField === 'character'} disabled={polishingField !== ''} on:click={() => polishField('character')}>
-                {polishingField === 'character' ? '润色中...' : 'AI 润色'}
-              </button>
+              <button class="btn btn-success btn-xs" on:click={saveCharacter} disabled={$taskRunning}>保存角色</button>
               <button class="btn btn-ghost btn-xs" on:click={closeCharForm}>取消</button>
             </div>
           </div>
         {/if}
 
         <div class="flex gap-1.5">
-          <button class="btn btn-primary btn-xs" on:click={() => openCharForm(null)}>新建角色</button>
-          <button class="btn btn-ghost btn-xs" on:click={aiGenerateSettings}>AI 自动生成</button>
+          <button class="btn btn-primary btn-xs" on:click={() => openCharForm(null)} disabled={$taskRunning}>新建角色</button>
+          {#if chars.length > 0}
+            <button class="btn btn-accent btn-xs" on:click={submitCharacters} disabled={$taskRunning}>提交角色设定给 AI</button>
+          {/if}
         </div>
       {/if}
     </div>
@@ -435,7 +360,7 @@
       <!-- svelte-ignore a11y-click-events-have-key-events -->
       <!-- svelte-ignore a11y-no-static-element-interactions -->
       <div class="flex justify-between items-center cursor-pointer select-none" on:click={() => wvCollapse = !wvCollapse}>
-        <h3 class="card-title text-sm">世界观管理 <span class="text-xs font-normal text-base-content/40">({filteredWvs.length})</span></h3>
+        <h3 class="card-title text-base">世界观管理 <span class="text-xs font-normal text-base-content/40">({filteredWvs.length})</span></h3>
         <svg class="w-4 h-4 text-base-content/40 transition-transform" class:rotate-180={wvCollapse} viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clip-rule="evenodd"/></svg>
       </div>
       {#if !wvCollapse}
@@ -455,12 +380,12 @@
               <div class="flex items-start gap-2.5 bg-base-300 rounded-lg p-2.5 group">
                 <div class="w-8 h-8 rounded-lg bg-accent/20 text-accent flex items-center justify-center text-xs font-bold shrink-0">{w.name[0]}</div>
                 <div class="flex-1 min-w-0">
-                  <div class="text-sm font-medium truncate">{w.name} <span class="text-[10px] font-normal text-base-content/30">[{catLabels[w.category] || w.category}]</span></div>
-                  <div class="text-[11px] text-base-content/40 line-clamp-1">{w.description}</div>
+                  <div class="text-sm font-medium truncate">{w.name} <span class="text-xs font-normal text-base-content/30">[{catLabels[w.category] || w.category}]</span></div>
+                  <div class="text-xs text-base-content/40 line-clamp-1">{w.description}</div>
                 </div>
                 <div class="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                  <button class="btn btn-ghost btn-xs px-1" on:click={() => openWvForm(w)}>编辑</button>
-                  <button class="btn btn-ghost btn-xs px-1 text-error" on:click={() => deleteWorldview(w.id)}>删除</button>
+                  <button class="btn btn-ghost btn-xs px-1" on:click={() => openWvForm(w)} disabled={$taskRunning}>编辑</button>
+                  <button class="btn btn-ghost btn-xs px-1 text-error" on:click={() => deleteWorldview(w.id)} disabled={$taskRunning}>删除</button>
                 </div>
               </div>
             {/each}
@@ -471,11 +396,11 @@
           <div class="bg-base-300 rounded-lg p-3 space-y-2 mt-1">
             <div class="grid grid-cols-2 gap-x-3 gap-y-1.5">
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">名称</label>
+                <label class="text-xs text-base-content/50 mb-0.5 block">名称</label>
                 <input type="text" class="input input-sm w-full" bind:value={wvName} />
               </div>
               <div>
-                <label class="text-[11px] text-base-content/50 mb-0.5 block">分类</label>
+                <label class="text-xs text-base-content/50 mb-0.5 block">分类</label>
                 <select class="select select-sm w-full" bind:value={wvCategory}>
                   <option value="geography">地理</option>
                   <option value="faction">势力</option>
@@ -486,25 +411,25 @@
               </div>
             </div>
             <div>
-              <label class="text-[11px] text-base-content/50 mb-0.5 block">描述</label>
-              <textarea class="textarea textarea-sm w-full h-16" bind:value={wvDescription}></textarea>
+              <label class="text-xs text-base-content/50 mb-0.5 block">描述</label>
+              <textarea class="textarea textarea-sm w-full h-16 text-sm" bind:value={wvDescription}></textarea>
             </div>
             <div>
-              <label class="text-[11px] text-base-content/50 mb-0.5 block">标签</label>
+              <label class="text-xs text-base-content/50 mb-0.5 block">标签</label>
               <input type="text" class="input input-sm w-full" bind:value={wvTags} placeholder="逗号分隔" />
             </div>
             <div class="flex gap-1.5">
-              <button class="btn btn-success btn-xs" on:click={saveWorldview}>保存</button>
-              <button class="btn btn-accent btn-xs" class:loading={polishingField === 'worldview'} disabled={polishingField !== ''} on:click={() => polishField('worldview')}>
-                {polishingField === 'worldview' ? '润色中...' : 'AI 润色'}
-              </button>
+              <button class="btn btn-success btn-xs" on:click={saveWorldview} disabled={$taskRunning}>保存</button>
               <button class="btn btn-ghost btn-xs" on:click={closeWvForm}>取消</button>
             </div>
           </div>
         {/if}
 
-        <div>
-          <button class="btn btn-primary btn-xs" on:click={() => openWvForm(null)}>新建世界观条目</button>
+        <div class="flex gap-1.5">
+          <button class="btn btn-primary btn-xs" on:click={() => openWvForm(null)} disabled={$taskRunning}>新建世界观条目</button>
+          {#if allWvs.length > 0}
+            <button class="btn btn-accent btn-xs" on:click={submitWorldview} disabled={$taskRunning}>提交世界观设定给 AI</button>
+          {/if}
         </div>
       {/if}
     </div>

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { skills, addToast } from '../lib/stores.js';
+  import { skills, addToast, taskRunning } from '../lib/stores.js';
 
   onMount(async () => {
     try { skills.set(await api('GET', '/api/skills')); } catch (e) {}
@@ -19,7 +19,7 @@
 <div class="card bg-base-200 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">技能管理</h2>
-    <p class="text-xs text-base-content/60 mb-3">技能是可选的创作辅助工具。启用后，全局助理会参考这些技能，去AI味功能需要启用 polish 类技能。</p>
+    <p class="text-sm text-base-content/60 mb-3">技能是可选的创作辅助工具。启用后，全局助理会参考这些技能，去AI味功能需要启用 polish 类技能。</p>
     <div class="overflow-x-auto">
       <table class="table table-sm">
         <thead>
@@ -46,6 +46,7 @@
                     type="checkbox"
                     class="toggle toggle-primary toggle-sm"
                     checked={sv.enabled}
+                    disabled={$taskRunning}
                     on:change={e => toggleSkill(sv.skill.id, e.target.checked)}
                   />
                 </td>

@@ -49,6 +49,7 @@ html, body, #app {
 
 body {
   font-family: var(--font-sans);
+  font-size: 15px;
 }
 
 /* Toast animation */
@@ -85,4 +86,14 @@ body {
 /* Force graph canvas */
 .graph-container canvas {
   display: block;
+}
+
+/* Bounce-in animation */
+@keyframes bounce-in {
+  0% { transform: scale(0.8); opacity: 0; }
+  60% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.animate-bounce-in {
+  animation: bounce-in 0.4s ease-out;
 }

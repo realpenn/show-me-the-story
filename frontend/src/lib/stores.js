@@ -8,6 +8,7 @@ export const skills = writable([]);
 export const taskRunning = writable(false);
 
 export const currentPage = writable('config');
+export const contextPage = writable('config');
 export const selectedChapter = writable(-1);
 
 export const streamingContent = writable('');
@@ -42,3 +43,11 @@ export function addToast(msg, type = 'info') {
 }
 
 export const toastStore = writable([]);
+
+export const taskNotification = writable(null);
+
+export const confirmModal = writable(null);
+
+export function showConfirm(message, onConfirm) {
+  confirmModal.set({ message, onConfirm });
+}

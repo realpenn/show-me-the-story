@@ -1,4 +1,4 @@
-import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, continueAnalysis, currentChatSession } from './stores.js';
+import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, continueAnalysis, currentChatSession, settings, taskNotification } from './stores.js';
 import { api } from './api.js';
 
 let eventSource = null;
@@ -23,11 +23,28 @@ export function connectSSE() {
     streamingChapterIdx.set(-1);
   });
 
-  eventSource.addEventListener('task_end', () => {
+  const taskNames = {
+    'outline_generation': '大纲生成',
+    'outline_revision': '大纲修订',
+    'chapter_generation': '章节创作',
+    'chapter_revision': '章节修订',
+    'foreshadow_suggest': '伏笔建议',
+    'continue_analysis': '内容分析',
+    'continuation_outline': '续写大纲',
+    'settings_reconciliation': '设定协调',
+    'chat_message': '助理对话',
+  };
+
+  eventSource.addEventListener('task_end', e => {
+    const d = JSON.parse(e.data);
     taskRunning.set(false);
     streamingContent.set('');
     streamingChapterIdx.set(-1);
     api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    if (d.success) {
+      const name = taskNames[d.task] || d.task;
+      taskNotification.set({ task: d.task, name, message: `${name}已完成` });
+    }
   });
 
   eventSource.addEventListener('content_chunk', e => {
@@ -53,6 +70,11 @@ export function connectSSE() {
     }).catch(() => {});
     api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
     addToast('设定协调完成：' + (d.explanation || ''), 'success');
+  });
+
+  eventSource.addEventListener('settings_updated', () => {
+    api('GET', '/api/settings').then(s => settings.set(s)).catch(() => {});
+    api('GET', '/api/config').then(c => config.set(c)).catch(() => {});
   });
 
   eventSource.addEventListener('foreshadow_suggestions', e => {
@@ -88,16 +110,6 @@ export function connectSSE() {
       );
       return { ...s, pending_tool_calls: toolCalls };
     });
-  });
-
-  eventSource.addEventListener('polish_result', e => {
-    addToast('去AI味完成', 'success');
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
-  });
-
-  eventSource.addEventListener('settings_polish_result', e => {
-    const d = JSON.parse(e.data);
-    window.dispatchEvent(new CustomEvent('settings_polish_result', { detail: d }));
   });
 
   eventSource.onerror = () => {
