@@ -117,6 +117,10 @@ func (lb *LogBroadcaster) SettingsReconciled(data interface{}) {
 	lb.Emit("settings_reconciled", data)
 }
 
+func (lb *LogBroadcaster) SettingsUpdated() {
+	lb.Emit("settings_updated", map[string]string{"status": "ok"})
+}
+
 func (lb *LogBroadcaster) ChatChunk(sessionID, text string) {
 	lb.Emit("chat_chunk", map[string]interface{}{
 		"session_id": sessionID,
@@ -137,20 +141,6 @@ func (lb *LogBroadcaster) ToolCallEnd(sessionID, toolName, result string) {
 		"session_id": sessionID,
 		"tool_name":  toolName,
 		"result":     result,
-	})
-}
-
-func (lb *LogBroadcaster) PolishResult(chapterIdx int, text string) {
-	lb.Emit("polish_result", map[string]interface{}{
-		"chapter_idx": chapterIdx,
-		"text":        text,
-	})
-}
-
-func (lb *LogBroadcaster) SettingsPolishResult(fieldType, text string) {
-	lb.Emit("settings_polish_result", map[string]interface{}{
-		"field_type": fieldType,
-		"text":       text,
 	})
 }
 

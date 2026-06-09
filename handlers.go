@@ -362,7 +362,7 @@ func (h *Handlers) PostChapterRevise(w http.ResponseWriter, r *http.Request) {
 		ctx := h.taskCtx
 
 		h.logger.Info("正在根据意见修改当前章节...")
-		err := ReviseChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, body.Feedback, h.logger)
+		err := ReviseChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, body.Feedback, h.settings, h.logger)
 
 		if err != nil {
 			h.endTask()
@@ -1327,224 +1327,15 @@ func (h *Handlers) DeleteRelation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) PostSettingsAIGenerate(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
-		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
-		return
-	}
-
-	go func() {
-		h.logger.TaskStart("ai_settings_generate")
-		ctx := h.taskCtx
-
-		h.logger.Info("正在 AI 自动生成设定...")
-		err := h.aiGenerateSettings(ctx)
-
-		if err != nil {
-			h.endTask()
-			if ctx.Err() != nil {
-				h.logger.Warn("AI 设定生成已取消")
-				h.logger.TaskEnd("ai_settings_generate", false)
-			} else {
-				h.logger.Error(fmt.Sprintf("AI 设定生成失败: %v", err))
-				h.logger.TaskEnd("ai_settings_generate", false)
-			}
-			return
-		}
-
-		h.endTask()
-		h.logger.Success("AI 设定生成完成！")
-		h.logger.TaskEnd("ai_settings_generate", true)
-	}()
-
-	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
-}
-
-func (h *Handlers) aiGenerateSettings(ctx context.Context) error {
-	outline := ""
-	for _, ch := range h.state.Chapters {
-		outline += fmt.Sprintf("第%d章《%s》: %s\n", ch.Num, ch.Title, ch.Outline)
-	}
-
-	if outline == "" {
-		outline = "暂无大纲"
-	}
-
-	snapshot := h.state.StoryConfigSnapshot
-	if snapshot == nil {
-		snapshot = &h.cfg.Story
-	}
-
-	userPrompt := fmt.Sprintf(`请根据以下小说信息，生成详细的角色设定和世界观设定。
-
-小说标题: 《%s》
-故事类型: %s
-写作风格: %s
-故事梗概: %s
-
-大纲:
-%s
-
-请以JSON格式返回：
-{
-  "characters": [
-    {
-      "name": "角色名",
-      "age": "年龄",
-      "appearance": "外貌描述",
-      "personality": "性格特点",
-      "background": "背景故事",
-      "motivation": "核心动机",
-      "abilities": "能力/技能",
-      "notes": "其他备注"
-    }
-  ],
-  "worldview": [
-    {
-      "category": "geography/faction/rule/history/other",
-      "name": "名称",
-      "description": "详细描述",
-      "tags": "相关标签"
-    }
-  ],
-  "organizations": [
-    {
-      "name": "组织名",
-      "type": "family/sect/nation/guild/other",
-      "description": "组织描述",
-      "members": []
-    }
-  ]
-}
-
-注意：
-1. 角色应覆盖大纲中的主要人物
-2. 世界观应涵盖故事所需的重要设定
-3. 组织应反映故事中的势力结构
-4. 请严格以JSON格式输出`,
-		h.state.Title, snapshot.Type, snapshot.WritingStyle,
-		snapshot.StorySynopsis, outline)
-
-	systemPrompt := "你是一位专业的小说设定生成师。请严格按照要求的JSON格式输出，不要添加任何额外文字或markdown代码块标记。"
-
-	rawResp := CallAPIWithRetryLog(ctx, h.apiCfg, systemPrompt, userPrompt, h.logger)
-	rawResp = cleanJSONResponse(rawResp)
-
-	var resp struct {
-		Characters    []Character      `json:"characters"`
-		Worldview     []WorldviewEntry `json:"worldview"`
-		Organizations []Organization   `json:"organizations"`
-	}
-	if err := json.Unmarshal([]byte(rawResp), &resp); err != nil {
-		return fmt.Errorf("解析AI生成结果失败: %w", err)
-	}
-
-	for i := range resp.Characters {
-		resp.Characters[i].ID = h.settings.nextCharacterID()
-		h.settings.Characters = append(h.settings.Characters, resp.Characters[i])
-	}
-
-	for i := range resp.Worldview {
-		resp.Worldview[i].ID = h.settings.nextWorldviewID()
-		h.settings.Worldview = append(h.settings.Worldview, resp.Worldview[i])
-	}
-
-	for i := range resp.Organizations {
-		resp.Organizations[i].ID = h.settings.nextOrganizationID()
-		h.settings.Organizations = append(h.settings.Organizations, resp.Organizations[i])
-	}
-
-	if err := SaveProjectSettings(h.settingsPath, h.settings); err != nil {
-		return fmt.Errorf("保存设定失败: %w", err)
-	}
-
-	h.logger.Info(fmt.Sprintf("已生成 %d 个角色、%d 条世界观、%d 个组织",
-		len(resp.Characters), len(resp.Worldview), len(resp.Organizations)))
-
-	return nil
+	h.writeError(w, http.StatusGone, "此功能已移至 LLM 对话中，请通过聊天让 AI 帮你生成设定")
 }
 
 func (h *Handlers) PostSettingsPolish(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
-		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
-		return
-	}
+	h.writeError(w, http.StatusGone, "此功能已移至 LLM 对话中，请通过聊天让 AI 帮你润色")
+}
 
-	var req struct {
-		FieldType string `json:"field_type"`
-		Content   string `json:"content"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.endTask()
-		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
-		return
-	}
-	if req.FieldType == "" {
-		h.endTask()
-		h.writeError(w, http.StatusBadRequest, "缺少 field_type")
-		return
-	}
-
-	go func() {
-		h.logger.TaskStart("settings_polish")
-		ctx := h.taskCtx
-
-		h.logger.Info("正在 AI 润色...")
-
-		outline := ""
-		for _, ch := range h.state.Chapters {
-			outline += fmt.Sprintf("第%d章《%s》: %s\n", ch.Num, ch.Title, ch.Outline)
-		}
-		if outline == "" {
-			outline = "暂无大纲"
-		}
-
-		snapshot := h.state.StoryConfigSnapshot
-		if snapshot == nil {
-			snapshot = &h.cfg.Story
-		}
-
-		var systemPrompt, userPrompt string
-
-		switch req.FieldType {
-		case "character":
-			systemPrompt = "你是一位专业的小说角色设计师。请根据已有信息补充和润色角色设定，保持原有信息不变，补充空白的字段。输出格式与输入相同，包含所有字段。"
-			userPrompt = fmt.Sprintf("小说标题: 《%s》\n故事类型: %s\n写作风格: %s\n故事梗概: %s\n\n大纲:\n%s\n\n当前角色信息:\n%s\n\n请对以上角色设定进行润色和补充。保留已有内容，为未填写的字段补充合理的内容。直接输出润色后的完整角色设定文本，保持原有格式。", h.state.Title, snapshot.Type, snapshot.WritingStyle, snapshot.StorySynopsis, outline, req.Content)
-		case "worldview":
-			systemPrompt = "你是一位专业的小说世界观架构师。请根据已有信息补充和润色世界观设定，保持原有信息不变，补充空白的内容。"
-			userPrompt = fmt.Sprintf("小说标题: 《%s》\n故事类型: %s\n写作风格: %s\n故事梗概: %s\n\n大纲:\n%s\n\n当前世界观设定:\n%s\n\n请对以上世界观设定进行润色和补充。保留已有内容，补充缺失的细节。直接输出润色后的完整文本。", h.state.Title, snapshot.Type, snapshot.WritingStyle, snapshot.StorySynopsis, outline, req.Content)
-		case "writing_style":
-			systemPrompt = "你是一位专业的文学风格顾问。请根据已有信息润色和补充写作风格描述。"
-			userPrompt = fmt.Sprintf("小说标题: 《%s》\n故事类型: %s\n故事梗概: %s\n\n大纲:\n%s\n\n当前写作风格描述:\n%s\n\n请对以上写作风格描述进行润色和补充，使其更加具体和有指导性。直接输出润色后的完整文本。", h.state.Title, snapshot.Type, snapshot.StorySynopsis, outline, req.Content)
-		case "story_synopsis":
-			systemPrompt = "你是一位专业的小说策划编辑。请根据已有信息润色和补充故事梗概。"
-			userPrompt = fmt.Sprintf("小说标题: 《%s》\n故事类型: %s\n写作风格: %s\n\n大纲:\n%s\n\n当前故事梗概:\n%s\n\n请对以上故事梗概进行润色和补充，使其包含完整的故事主线走向、核心冲突、关键转折点等要素。直接输出润色后的完整文本。", h.state.Title, snapshot.Type, snapshot.WritingStyle, outline, req.Content)
-		default:
-			h.endTask()
-			h.logger.Error("未知的字段类型: " + req.FieldType)
-			h.logger.TaskEnd("settings_polish", false)
-			return
-		}
-
-		result := CallAPIWithRetryLog(ctx, h.apiCfg, systemPrompt, userPrompt, h.logger)
-		if result == "" {
-			h.endTask()
-			if ctx.Err() != nil {
-				h.logger.Warn("AI 润色已取消")
-				h.logger.TaskEnd("settings_polish", false)
-			} else {
-				h.logger.Error("AI 润色失败")
-				h.logger.TaskEnd("settings_polish", false)
-			}
-			return
-		}
-
-		h.endTask()
-		h.logger.Success("AI 润色完成！")
-		h.logger.TaskEnd("settings_polish", true)
-		h.logger.SettingsPolishResult(req.FieldType, result)
-	}()
-
-	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+func (h *Handlers) PostChapterPolish(w http.ResponseWriter, r *http.Request) {
+	h.writeError(w, http.StatusGone, "此功能已移至 LLM 对话中，请通过聊天让 AI 帮你去AI味")
 }
 
 func (h *Handlers) GetSkills(w http.ResponseWriter, r *http.Request) {
@@ -1603,68 +1394,6 @@ func (h *Handlers) PutSkillToggle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, map[string]interface{}{"id": id, "enabled": req.Enabled})
-}
-
-func (h *Handlers) PostChapterPolish(w http.ResponseWriter, r *http.Request) {
-	if !h.tryStartTask() {
-		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
-		return
-	}
-
-	polishSkills := GetEnabledSkillsByCategory(h.skills, h.cfg.SkillConfig, "polish")
-	if len(polishSkills) == 0 {
-		h.endTask()
-		h.writeError(w, http.StatusBadRequest, "没有启用的润色技能，请先在技能管理页启用 polish 类技能")
-		return
-	}
-
-	go func() {
-		h.logger.TaskStart("chapter_polish")
-		ctx := h.taskCtx
-
-		chIdx := h.state.CurrentChapterIndex
-		if chIdx >= len(h.state.Chapters) {
-			chIdx = len(h.state.Chapters) - 1
-		}
-		if chIdx < 0 || chIdx >= len(h.state.Chapters) {
-			h.endTask()
-			h.logger.Error("没有可润色的章节")
-			h.logger.TaskEnd("chapter_polish", false)
-			return
-		}
-
-		if h.state.Chapters[chIdx].Status != StatusReview && chIdx > 0 {
-			chIdx = chIdx - 1
-		}
-		if h.state.Chapters[chIdx].Status != StatusReview {
-			h.endTask()
-			h.logger.Error("当前没有处于审核状态的章节可润色")
-			h.logger.TaskEnd("chapter_polish", false)
-			return
-		}
-
-		h.logger.Info(fmt.Sprintf("正在对第 %d 章进行去AI味处理...", h.state.Chapters[chIdx].Num))
-		err := PolishChapterAction(ctx, h.apiCfg, h.cfg, h.state, chIdx, polishSkills, h.progressPath, h.logger)
-
-		if err != nil {
-			h.endTask()
-			if ctx.Err() != nil {
-				h.logger.Warn("去AI味处理已取消")
-				h.logger.TaskEnd("chapter_polish", false)
-			} else {
-				h.logger.Error(fmt.Sprintf("去AI味失败: %v", err))
-				h.logger.TaskEnd("chapter_polish", false)
-			}
-			return
-		}
-
-		h.endTask()
-		h.logger.Success(fmt.Sprintf("第 %d 章去AI味完成！", h.state.Chapters[chIdx].Num))
-		h.logger.TaskEnd("chapter_polish", true)
-		h.broadcastProgress()
-	}()
-
-	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
 func (h *Handlers) GetChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -1729,7 +1458,8 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 
 	var req struct {
-		Content string `json:"content"`
+		Content     string `json:"content"`
+		ContextPage string `json:"context_page"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Content == "" {
 		h.endTask()
@@ -1737,28 +1467,33 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	session, err := LoadChatSession(h.sessionsDir, sessionID)
+	if err != nil {
+		h.endTask()
+		h.writeError(w, http.StatusNotFound, "会话不存在")
+		return
+	}
+
+	now := time.Now().Format(time.RFC3339)
+	session.Messages = append(session.Messages, ChatMessage{
+		Role:      "user",
+		Content:   req.Content,
+		Timestamp: now,
+	})
+
+	if len(session.Messages) == 1 {
+		session.Title = generateChatTitle(req.Content)
+	}
+
+	if err := SaveChatSession(h.sessionsDir, session); err != nil {
+		h.endTask()
+		h.writeError(w, http.StatusInternalServerError, "保存会话失败: "+err.Error())
+		return
+	}
+
 	go func() {
 		h.logger.TaskStart("chat_message")
 		ctx := h.taskCtx
-
-		session, err := LoadChatSession(h.sessionsDir, sessionID)
-		if err != nil {
-			h.endTask()
-			h.logger.Error(fmt.Sprintf("加载会话失败: %v", err))
-			h.logger.TaskEnd("chat_message", false)
-			return
-		}
-
-		now := time.Now().Format(time.RFC3339)
-		session.Messages = append(session.Messages, ChatMessage{
-			Role:      "user",
-			Content:   req.Content,
-			Timestamp: now,
-		})
-
-		if len(session.Messages) == 1 {
-			session.Title = generateChatTitle(req.Content)
-		}
 
 		var history []AgentStep
 		for _, m := range session.Messages {
@@ -1783,6 +1518,19 @@ func (h *Handlers) PostChatMessage(w http.ResponseWriter, r *http.Request) {
 			Config:       h.cfg,
 			Skills:       h.skills,
 			Logger:       h.logger,
+			ContextPage:  req.ContextPage,
+			ProgressPath: h.progressPath,
+			CfgPath:      h.cfgPath,
+			SessionsDir:  h.sessionsDir,
+			ProjectDir:   h.projectDir,
+			StartAsync: func(taskName string, fn func(goCtx context.Context)) {
+				go func() {
+					h.logger.TaskStart(taskName)
+					fn(context.Background())
+					h.logger.TaskEnd(taskName, true)
+					h.broadcastProgress()
+				}()
+			},
 		}
 
 		reply, newHistory, err := RunAgentLoop(ctx, agentCtx, req.Content, history, 10)

@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+func preferUserValue(userVal, fallback string) string {
+	if userVal != "" {
+		return userVal
+	}
+	return fallback
+}
+
 func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath string, settings *ProjectSettings, logger *LogBroadcaster) error {
 	if state.Phase != "writing" {
 		return fmt.Errorf("当前不在写作阶段")
@@ -104,7 +111,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 	return nil
 }
 
-func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath, feedback string, logger *LogBroadcaster) error {
+func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath, feedback string, settings *ProjectSettings, logger *LogBroadcaster) error {
 	if state.Phase != "writing" {
 		return fmt.Errorf("当前不在写作阶段")
 	}
@@ -122,7 +129,7 @@ func ReviseChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 	logger.Info(fmt.Sprintf("正在修改第 %d 章《%s》...", ch.Num, ch.Title))
 
 	logger.StepInfo(1, 3, "正在根据意见重写正文...")
-	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, logger)
+	revisedContent, err := reviseChapterContentStream(ctx, apiCfg, cfg, state, chapterIdx, feedback, settings, logger)
 	if err != nil {
 		return fmt.Errorf("修改章节失败: %w", err)
 	}
@@ -189,14 +196,14 @@ func generateChapterContent(ctx context.Context, apiCfg *APIConfig, cfg *Config,
 	worldviewContext := buildWorldviewContext(settings, ch.Outline)
 
 	userPrompt := RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
-		"Title":             state.Title,
+		"Title":             preferUserValue(cfg.Story.Title, state.Title),
 		"ChapterNum":        fmt.Sprintf("%d", ch.Num),
 		"CorePrompt":        state.CorePrompt,
-		"StorySynopsis":     state.StorySynopsis,
+		"StorySynopsis":     preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
 		"HistorySummary":    historySummary,
 		"ChapterTitle":      ch.Title,
 		"ChapterOutline":    ch.Outline,
-		"WritingStyle":      snapshot.WritingStyle,
+		"WritingStyle":      cfg.Story.WritingStyle,
 		"CharacterContext":  characterContext,
 		"WorldviewContext":  worldviewContext,
 		"TargetWords":       fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
@@ -227,14 +234,14 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 	worldviewContext := buildWorldviewContext(settings, ch.Outline)
 
 	userPrompt := RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
-		"Title":             state.Title,
+		"Title":             preferUserValue(cfg.Story.Title, state.Title),
 		"ChapterNum":        fmt.Sprintf("%d", ch.Num),
 		"CorePrompt":        state.CorePrompt,
-		"StorySynopsis":     state.StorySynopsis,
+		"StorySynopsis":     preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
 		"HistorySummary":    historySummary,
 		"ChapterTitle":      ch.Title,
 		"ChapterOutline":    ch.Outline,
-		"WritingStyle":      snapshot.WritingStyle,
+		"WritingStyle":      cfg.Story.WritingStyle,
 		"CharacterContext":  characterContext,
 		"WorldviewContext":  worldviewContext,
 		"TargetWords":       fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
@@ -455,54 +462,76 @@ func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *APIConfig
 	}
 }
 
-func reviseChapterContent(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, chapterIdx int, userFeedback string) (string, error) {
+func reviseChapterContent(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, chapterIdx int, userFeedback string, settings *ProjectSettings) (string, error) {
 	ch := state.Chapters[chapterIdx]
 
 	historySummary := buildHistorySummary(state, chapterIdx)
+
+	snapshot := state.StoryConfigSnapshot
+	if snapshot == nil {
+		snapshot = &cfg.Story
+	}
+
+	foreshadowContext := formatActiveForeshadowsForChapter(state.Foreshadows, ch.Num)
+	characterContext := buildCharacterContext(settings, ch.Outline)
+	worldviewContext := buildWorldviewContext(settings, ch.Outline)
+
+	userPrompt := RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
+		"Title":             preferUserValue(cfg.Story.Title, state.Title),
+		"ChapterNum":        fmt.Sprintf("%d", ch.Num),
+		"CorePrompt":        state.CorePrompt,
+		"StorySynopsis":     preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
+		"HistorySummary":    historySummary,
+		"ChapterTitle":      ch.Title,
+		"ChapterOutline":    ch.Outline + "\n\n【用户修改意见】" + userFeedback,
+		"WritingStyle":      cfg.Story.WritingStyle,
+		"CharacterContext":  characterContext,
+		"WorldviewContext":  worldviewContext,
+		"TargetWords":       fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
+		"Foreshadows":       foreshadowContext,
+	})
 
 	systemPrompt := state.CorePrompt
 	if systemPrompt == "" {
 		systemPrompt = "你是一位小说作者。"
 	}
-
-	userPrompt := fmt.Sprintf(`请根据以下意见修改第 %d 章《%s》的正文。
-
-【核心写作提示词】%s
-【故事梗概】%s
-【前情提要】%s
-【本章大纲】%s
-【用户修改意见】%s
-
-请输出修改后的完整章节正文。`,
-		ch.Num, ch.Title,
-		state.CorePrompt, state.StorySynopsis,
-		historySummary, ch.Outline, userFeedback)
 
 	return CallAPI(ctx, apiCfg, systemPrompt, userPrompt)
 }
 
-func reviseChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, chapterIdx int, userFeedback string, logger *LogBroadcaster) (string, error) {
+func reviseChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, chapterIdx int, userFeedback string, settings *ProjectSettings, logger *LogBroadcaster) (string, error) {
 	ch := state.Chapters[chapterIdx]
 
 	historySummary := buildHistorySummary(state, chapterIdx)
+
+	snapshot := state.StoryConfigSnapshot
+	if snapshot == nil {
+		snapshot = &cfg.Story
+	}
+
+	foreshadowContext := formatActiveForeshadowsForChapter(state.Foreshadows, ch.Num)
+	characterContext := buildCharacterContext(settings, ch.Outline)
+	worldviewContext := buildWorldviewContext(settings, ch.Outline)
+
+	userPrompt := RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
+		"Title":             preferUserValue(cfg.Story.Title, state.Title),
+		"ChapterNum":        fmt.Sprintf("%d", ch.Num),
+		"CorePrompt":        state.CorePrompt,
+		"StorySynopsis":     preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
+		"HistorySummary":    historySummary,
+		"ChapterTitle":      ch.Title,
+		"ChapterOutline":    ch.Outline + "\n\n【用户修改意见】" + userFeedback,
+		"WritingStyle":      cfg.Story.WritingStyle,
+		"CharacterContext":  characterContext,
+		"WorldviewContext":  worldviewContext,
+		"TargetWords":       fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
+		"Foreshadows":       foreshadowContext,
+	})
 
 	systemPrompt := state.CorePrompt
 	if systemPrompt == "" {
 		systemPrompt = "你是一位小说作者。"
 	}
-
-	userPrompt := fmt.Sprintf(`请根据以下意见修改第 %d 章《%s》的正文。
-
-【核心写作提示词】%s
-【故事梗概】%s
-【前情提要】%s
-【本章大纲】%s
-【用户修改意见】%s
-
-请输出修改后的完整章节正文。`,
-		ch.Num, ch.Title,
-		state.CorePrompt, state.StorySynopsis,
-		historySummary, ch.Outline, userFeedback)
 
 	totalChars := 0
 	nextReport := 500
@@ -636,6 +665,5 @@ func PolishChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, st
 		return fmt.Errorf("保存进度失败: %w", err)
 	}
 
-	logger.PolishResult(chapterIdx, result)
 	return nil
 }

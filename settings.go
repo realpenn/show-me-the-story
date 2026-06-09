@@ -191,14 +191,21 @@ func buildWorldviewContext(settings *ProjectSettings, chapterOutline string) str
 	}
 
 	if len(settings.Organizations) > 0 {
+		var relevantOrgs []Organization
 		for _, o := range settings.Organizations {
 			if strings.Contains(chapterOutline, o.Name) {
-				sb.WriteString(fmt.Sprintf("【组织:%s】(%s)\n  %s\n", o.Name, o.Type, o.Description))
-				if len(o.Members) > 0 {
-					sb.WriteString(fmt.Sprintf("  成员IDs: %s\n", strings.Join(o.Members, ", ")))
-				}
-				sb.WriteString("\n")
+				relevantOrgs = append(relevantOrgs, o)
 			}
+		}
+		if len(relevantOrgs) == 0 {
+			relevantOrgs = settings.Organizations
+		}
+		for _, o := range relevantOrgs {
+			sb.WriteString(fmt.Sprintf("【组织:%s】(%s)\n  %s\n", o.Name, o.Type, o.Description))
+			if len(o.Members) > 0 {
+				sb.WriteString(fmt.Sprintf("  成员IDs: %s\n", strings.Join(o.Members, ", ")))
+			}
+			sb.WriteString("\n")
 		}
 	}
 
