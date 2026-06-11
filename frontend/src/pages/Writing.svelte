@@ -1,7 +1,7 @@
 <script>
-  import { tick, onMount } from 'svelte';
+  import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { progress, taskRunning, streamingContent, streamingChapterIdx, selectedChapter, autoConfirm, addToast, confirmModal } from '../lib/stores.js';
+  import { progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, selectedChapter, autoConfirm, addToast, confirmModal } from '../lib/stores.js';
 
   // 保留 prop 以兼容 App 传参
   export let sendToChat = async () => {};
@@ -46,8 +46,10 @@
   $: ch = $selectedChapter >= 0 && $selectedChapter < chapters.length ? chapters[$selectedChapter] : null;
   $: isCurrent = ch && currentIdx === $selectedChapter;
   $: isStreamingThis = $streamingChapterIdx === $selectedChapter && $streamingContent;
+  // 流式期间 $streamingContent 只含尾部窗口（性能保护），全文在生成结束后由 progress 拉取
   $: displayContent = isStreamingThis ? $streamingContent : (ch?.content || '');
-  $: wordCount = displayContent ? displayContent.replace(/\s/g, '').length : 0;
+  // 流式期间不对全文做正则统计，直接用 SSE 累计的字数
+  $: wordCount = isStreamingThis ? $streamCharCount : (ch?.content ? ch.content.replace(/\s/g, '').length : 0);
   $: totalWords = chapters.reduce((sum, c) => sum + (c.content ? c.content.replace(/\s/g, '').length : 0), 0);
 
   const statusMeta = {
@@ -61,10 +63,17 @@
   let showRevise = false;
   let contentEl;
 
-  // 流式输出时自动滚动到底部
-  $: if (isStreamingThis && contentEl) {
-    tick().then(() => { if (contentEl) contentEl.scrollTop = contentEl.scrollHeight; });
+  // 流式输出时自动滚动到底部：合并到 rAF，每帧最多一次，避免高频强制重排
+  let scrollPending = false;
+  function scheduleScroll() {
+    if (scrollPending) return;
+    scrollPending = true;
+    requestAnimationFrame(() => {
+      scrollPending = false;
+      if (contentEl) contentEl.scrollTop = contentEl.scrollHeight;
+    });
   }
+  $: if (isStreamingThis && contentEl) scheduleScroll();
 
   function selectChapter(i) {
     selectedChapter.set(i);
@@ -228,6 +237,12 @@
               {/if}
 
               {#if displayContent}
+                {#if isStreamingThis}
+                  <div class="text-xs text-warning/80 flex items-center gap-1.5">
+                    <span class="loading loading-dots loading-xs"></span>
+                    生成中 · 为保证页面流畅仅显示最新内容，完成后展示全文
+                  </div>
+                {/if}
                 <div bind:this={contentEl} class="bg-base-300 rounded-lg p-4 text-[15px] chapter-content reading-area max-h-[calc(100vh-420px)] min-h-[200px] overflow-y-auto">
                   {displayContent}
                   {#if isStreamingThis}

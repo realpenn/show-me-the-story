@@ -42,12 +42,29 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 
 	logger.Info(fmt.Sprintf("开始创作第 %d 章: 《%s》", ch.Num, ch.Title))
 
+	// 写前检查：本章大纲若已与实际写出的剧情冲突（如大纲安排初遇但前文已认识），
+	// 先最小化修订大纲再动笔，避免按过时大纲写出矛盾内容。
+	if i > 0 {
+		logger.StepInfo(1, 5, "正在检查本章大纲与当前剧情的一致性...")
+		revised, err := checkOutlineConsistency(ctx, apiCfg, cfg, state, i, logger)
+		if err != nil {
+			logger.Warn(fmt.Sprintf("大纲一致性检查失败: %v（按原大纲继续）", err))
+		} else if revised {
+			if err := SaveProgress(progressPath, state); err != nil {
+				return err
+			}
+			logger.Info("本章大纲已自动修订以匹配当前剧情")
+		} else {
+			logger.Info("本章大纲与当前剧情一致 ✓")
+		}
+	}
+
 	maxFactCheckRetries := 3
 	for attempt := 0; attempt <= maxFactCheckRetries; attempt++ {
 		if ctx.Err() != nil {
 			return fmt.Errorf("任务已取消")
 		}
-		logger.StepInfo(1, 4, "正在构思并撰写正文...")
+		logger.StepInfo(2, 5, "正在构思并撰写正文...")
 		content := generateChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, logger)
 		if content == "" {
 			return fmt.Errorf("正文生成失败或被取消")
@@ -55,7 +72,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		ch.Content = content
 		logger.Info(fmt.Sprintf("正文撰写完毕，共 %d 字", len([]rune(content))))
 
-		logger.StepInfo(2, 4, "正在提炼本章摘要...")
+		logger.StepInfo(3, 5, "正在提炼本章摘要...")
 		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
 		if summary == "" {
 			return fmt.Errorf("摘要提炼失败或被取消")
@@ -63,9 +80,9 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 		ch.Summary = summary
 		logger.Info("摘要提炼完成")
 
-		logger.StepInfo(3, 4, "正在对本章进行事实核查...")
+		logger.StepInfo(4, 5, "正在对本章进行事实核查...")
 		historySummary := buildHistorySummary(state, i)
-		factCheckResult := generateChapterFactCheckWithRetryLog(ctx, apiCfg, cfg, content, historySummary, logger)
+		factCheckResult := generateChapterFactCheckWithRetryLog(ctx, apiCfg, cfg, state, i, content, historySummary, logger)
 
 		failed, issues := parseFactCheckResult(factCheckResult)
 		if failed {
@@ -82,7 +99,7 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 	}
 
 	if len(state.Foreshadows) > 0 {
-		logger.StepInfo(4, 4, "正在更新伏笔状态...")
+		logger.StepInfo(5, 5, "正在更新伏笔状态...")
 		if err := UpdateForeshadows(ctx, apiCfg, cfg, state, i, logger); err != nil {
 			logger.Warn(fmt.Sprintf("伏笔状态更新失败: %v（不影响本章）", err))
 		} else {
@@ -131,6 +148,58 @@ func parseFactCheckResult(raw string) (failed bool, issues string) {
 	}
 	// fallback：无法解析 JSON 时按字符串匹配
 	return strings.Contains(raw, "FAIL"), truncate(raw, 300)
+}
+
+// checkOutlineConsistency 写前大纲一致性检查：对照前情提要与上一章结尾，
+// 检查本章大纲是否已与实际剧情冲突（如安排初遇但前文已认识）。
+// 冲突时用 AI 给出的最小化修订替换本章大纲（仅当前章），返回是否发生了修订。
+func checkOutlineConsistency(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, logger *LogBroadcaster) (bool, error) {
+	ch := &state.Chapters[idx]
+	if strings.TrimSpace(ch.Outline) == "" {
+		return false, nil
+	}
+
+	prevEnding := ""
+	if idx > 0 && state.Chapters[idx-1].Content != "" {
+		if tail := tailAtParagraph(state.Chapters[idx-1].Content, prevTailMaxRunes); tail != "" {
+			prevEnding = "【上一章结尾原文】\n" + tail + "\n\n"
+		}
+	}
+
+	userPrompt := RenderPrompt(cfg.Prompts.OutlineConsistencyCheck, map[string]string{
+		"ChapterNum":     fmt.Sprintf("%d", ch.Num),
+		"ChapterTitle":   ch.Title,
+		"ChapterOutline": ch.Outline,
+		"HistorySummary": buildHistorySummary(state, idx),
+		"PreviousEnding": prevEnding,
+	})
+	systemPrompt := "你是一位严谨的小说策划编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字。"
+
+	rawResp := CallAPIWithRetryLog(ctx, apiCfg, systemPrompt, userPrompt, logger)
+	if rawResp == "" {
+		return false, fmt.Errorf("API 调用失败或被取消")
+	}
+
+	var resp struct {
+		Conflict       bool     `json:"conflict"`
+		Issues         []string `json:"issues"`
+		RevisedOutline string   `json:"revised_outline"`
+	}
+	jsonStr := extractJSON(cleanJSONResponse(rawResp))
+	if jsonStr == "" {
+		return false, fmt.Errorf("无法解析检查结果")
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
+		return false, fmt.Errorf("解析检查结果JSON失败: %w", err)
+	}
+
+	if !resp.Conflict || strings.TrimSpace(resp.RevisedOutline) == "" {
+		return false, nil
+	}
+
+	logger.Warn(fmt.Sprintf("第 %d 章大纲与当前剧情冲突: %s", ch.Num, strings.Join(resp.Issues, "；")))
+	ch.Outline = strings.TrimSpace(resp.RevisedOutline)
+	return true, nil
 }
 
 // ReviseChapterAction 修订"当前章节"（写作流程中处于 review/writing 状态的章节）。
@@ -281,22 +350,25 @@ func generateChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *C
 
 	characterContext := buildCharacterContext(settings, ch.Outline)
 	worldviewContext := buildWorldviewContext(settings, ch.Outline)
+	outlineConstraints := buildOutlineConstraints(state, idx)
 
 	userPrompt := RenderPrompt(cfg.Prompts.ChapterWriting, map[string]string{
-		"Title":            preferUserValue(cfg.Story.Title, state.Title),
-		"ChapterNum":       fmt.Sprintf("%d", ch.Num),
-		"CorePrompt":       state.CorePrompt,
-		"StorySynopsis":    preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
-		"HistorySummary":   historySummary,
-		"PreviousEnding":   buildPreviousChapterTail(state, idx),
-		"ChapterTitle":     ch.Title,
-		"ChapterOutline":   ch.Outline,
-		"WritingStyle":     cfg.Story.WritingStyle,
-		"CharacterContext": characterContext,
-		"WorldviewContext": worldviewContext,
-		"TargetWords":      fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
-		"Foreshadows":      foreshadowContext,
+		"Title":              preferUserValue(cfg.Story.Title, state.Title),
+		"ChapterNum":         fmt.Sprintf("%d", ch.Num),
+		"CorePrompt":         state.CorePrompt,
+		"StorySynopsis":      preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
+		"HistorySummary":     historySummary,
+		"PreviousEnding":     buildPreviousChapterTail(state, idx),
+		"ChapterTitle":       ch.Title,
+		"ChapterOutline":     ch.Outline,
+		"WritingStyle":       cfg.Story.WritingStyle,
+		"CharacterContext":   characterContext,
+		"WorldviewContext":   worldviewContext,
+		"TargetWords":        fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
+		"Foreshadows":        foreshadowContext,
+		"OutlineConstraints": outlineConstraints,
 	})
+	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.ChapterWriting, userPrompt, "{{.OutlineConstraints}}", outlineConstraints)
 
 	systemPrompt := state.CorePrompt
 	if systemPrompt == "" {
@@ -380,24 +452,36 @@ func generateChapterSummaryWithRetryLog(ctx context.Context, apiCfg *APIConfig, 
 	}
 }
 
-func generateChapterFactCheck(ctx context.Context, apiCfg *APIConfig, cfg *Config, content string, historySummary string) (string, error) {
+func generateChapterFactCheck(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, content string, historySummary string) (string, error) {
+	ch := state.Chapters[idx]
+	outlineConstraints := buildOutlineConstraints(state, idx)
+
 	userPrompt := RenderPrompt(cfg.Prompts.FactCheck, map[string]string{
-		"ChapterContent": content,
-		"HistorySummary": historySummary,
-		"CorePrompt":     "",
+		"ChapterContent":     content,
+		"HistorySummary":     historySummary,
+		"CorePrompt":         "",
+		"ChapterOutline":     ch.Outline,
+		"OutlineConstraints": outlineConstraints,
 	})
+	// 旧模板兜底：缺占位符时把材料和补充核查规则追加到末尾
+	userPrompt = appendIfMissingPlaceholder(cfg.Prompts.FactCheck, userPrompt, "{{.ChapterOutline}}",
+		"【本章大纲】\n"+ch.Outline)
+	if outlineConstraints != "" {
+		userPrompt = appendIfMissingPlaceholder(cfg.Prompts.FactCheck, userPrompt, "{{.OutlineConstraints}}",
+			outlineConstraints+"补充核查范围（同样属于必须报告的客观矛盾）：(a) 提前引入按章节脉络安排在后续章节才登场或发生的人物/事件；(b) 前文已发生的一次性事件（初次见面、身份揭示等）在本章作为新事件重复发生。")
+	}
 
 	systemPrompt := "你是一位严谨的小说事实核查员。请严格按照要求的JSON格式输出。"
 	return CallAPI(ctx, apiCfg, systemPrompt, userPrompt)
 }
 
-func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *APIConfig, cfg *Config, content string, historySummary string, logger *LogBroadcaster) string {
+func generateChapterFactCheckWithRetryLog(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, content string, historySummary string, logger *LogBroadcaster) string {
 	retryCount := 0
 	for {
 		if ctx.Err() != nil {
 			return ""
 		}
-		result, err := generateChapterFactCheck(ctx, apiCfg, cfg, content, historySummary)
+		result, err := generateChapterFactCheck(ctx, apiCfg, cfg, state, idx, content, historySummary)
 		if err == nil && result != "" {
 			return result
 		}
@@ -505,6 +589,59 @@ func reviseSubsequentOutlines(ctx context.Context, apiCfg *APIConfig, cfg *Confi
 	}
 
 	return nil
+}
+
+// futureOutlineWindow 注入后续章节大纲的窗口大小（章数）
+const futureOutlineWindow = 10
+
+// buildOutlineConstraints 构建「全书章节脉络」反向约束块：
+// 后续章节大纲防止人物/事件提前出现，前文章节大纲防止一次性事件重复发生。
+// 返回值非空时以 "\n\n" 结尾，便于直接拼入模板占位符。
+func buildOutlineConstraints(state *Progress, idx int) string {
+	var past, future strings.Builder
+	for i := 0; i < idx && i < len(state.Chapters); i++ {
+		ch := state.Chapters[i]
+		if strings.TrimSpace(ch.Outline) == "" {
+			continue
+		}
+		past.WriteString(fmt.Sprintf("第%d章《%s》：%s\n", ch.Num, ch.Title, ch.Outline))
+	}
+	end := idx + 1 + futureOutlineWindow
+	if end > len(state.Chapters) {
+		end = len(state.Chapters)
+	}
+	for i := idx + 1; i < end; i++ {
+		ch := state.Chapters[i]
+		if strings.TrimSpace(ch.Outline) == "" {
+			continue
+		}
+		future.WriteString(fmt.Sprintf("第%d章《%s》：%s\n", ch.Num, ch.Title, ch.Outline))
+	}
+	if past.Len() == 0 && future.Len() == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("【全书章节脉络（反向约束，必须严格遵守）】\n")
+	if future.Len() > 0 {
+		sb.WriteString("◆ 后续章节安排——以下人物登场、初遇、身份揭示等事件已安排在对应章节，本章严禁提前发生，也不得以任何形式暗示或剧透：\n")
+		sb.WriteString(future.String())
+	}
+	if past.Len() > 0 {
+		sb.WriteString("◆ 前文已发生——以下事件已经发生，本章不得将其作为新事件重复发生（尤其是初次见面、身份揭示等一次性事件，只能作为既成事实延续）：\n")
+		sb.WriteString(past.String())
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// appendIfMissingPlaceholder 旧项目兼容兜底：prompts 随 config.json 持久化，
+// 老项目存的是没有新占位符的旧模板，applyDefaults 只在字段为空时回填。
+// 若模板中缺少占位符，则把内容块追加到渲染结果末尾，保证新上下文仍然生效。
+func appendIfMissingPlaceholder(template, rendered, placeholder, block string) string {
+	if strings.TrimSpace(block) == "" || strings.Contains(template, placeholder) {
+		return rendered
+	}
+	return rendered + "\n\n" + strings.TrimSpace(block)
 }
 
 func buildHistorySummary(state *Progress, idx int) string {

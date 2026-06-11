@@ -69,7 +69,7 @@ task dev                              # 编译并启动 Go 后端
 | `state.go` | `Progress`、`ChapterState`、`Foreshadow` 结构体，`LoadProgress`、`SaveProgress`（原子写入）、`ChapterMarkdownPath`、`SaveChapterMarkdown(projectDir, ...)`（写入项目目录） |
 | `api.go` | `CallAPI`/`CallAPIMessages`（同步）、`CallAPIStream`/`CallAPIStreamMessages`（流式，支持完整多轮消息历史）、`CallAPIWithRetry`/`CallAPIWithRetryLog`（无限重试）、`CallAPIStreamWithRetry`/`CallAPIStreamWithRetryLog`，`validateAPIConfig`、`isFatalAPIError`（401/403/404 致命，网络超时可重试） |
 | `outline.go` | `generateOutline`、`reviseOutline`、`GenerateOutlineAction`（存在已确认章节时拒绝整体重新生成）、`ReviseOutlineAction`、`ConfirmOutlineAction`、`EditChapterOutline`、`cleanJSONResponse` |
-| `writing.go` | `GenerateChapterAction`、`ReviseChapterAction`（当前审核中章节）、`ReviseSpecificChapterAction`（定向最小化修订任意章节，不影响其他章节）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`（JSON 优先 + 字符串 fallback）、章节内容生成/摘要/事实核查/流式输出、`buildHistorySummary`、`buildPreviousChapterTail`（上一章尾部约 800 字注入写作 prompt）、`splitChapterOpening` |
+| `writing.go` | `GenerateChapterAction`（含写前大纲一致性检查，共 5 步）、`ReviseChapterAction`（当前审核中章节）、`ReviseSpecificChapterAction`（定向最小化修订任意章节，不影响其他章节）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`（JSON 优先 + 字符串 fallback）、`checkOutlineConsistency`（写前检查本章大纲与已写剧情冲突，冲突时最小化修订本章大纲）、章节内容生成/摘要/事实核查/流式输出、`buildHistorySummary`、`buildPreviousChapterTail`（上一章尾部约 800 字注入写作 prompt）、`buildOutlineConstraints`（全书章节脉络反向约束：后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复，注入写作与事实核查 prompt）、`appendIfMissingPlaceholder`（老项目持久化旧模板缺新占位符时把上下文块追加到渲染结果末尾兜底）、`splitChapterOpening` |
 | `foreshadow.go` | `SuggestForeshadows`、`UpdateForeshadows`、伏笔格式化注入、伏笔告警、`NextForeshadowID` |
 | `continue.go` | `AnalyzeExistingContent`、`ImportContinueAction`、`GenerateContinuationOutline`、`splitContentByChapters` |
 | `reconcile.go` | `ReconcileSettingsAction`、`regeneratePendingOutlines`、设定协调逻辑 |
@@ -99,16 +99,16 @@ task dev                              # 编译并启动 Go 后端
 | `src/lib/api.js` | `api(method, url, body)` — fetch 封装 |
 | `src/lib/router.js` | `currentPage` store + hash 路由监听 |
 | `src/lib/stores.js` | 全局 Svelte stores（progress、config、settings、taskRunning、streamCharCount、autoConfirm、lastFailedTask 等）+ toast/log 管理 |
-| `src/lib/sse.js` | `connectSSE()` — EventSource 连接 + 13 种事件处理 → 更新 stores；content_chunk/chat_chunk 按 150ms 节流缓冲后批量刷入 store（避免逐 token 重渲染导致页面卡死）；stream_start 事件清空流式缓冲 |
+| `src/lib/sse.js` | `connectSSE()` — EventSource 连接 + 13 种事件处理 → 更新 stores；content_chunk/chat_chunk 按 150ms 节流缓冲批量刷入；章节流式全文只存模块级变量，`streamingContent` store 仅保留尾部窗口（约 3000 字符，渲染成本 O(1)，避免全文重排导致页面卡死）；`refreshProgress()` 对 progress_update 拉取做 500ms 去抖（task_end 立即刷新）；stream_start 事件清空流式缓冲 |
 | `src/lib/markdown.js` | `renderMarkdown(text)` — marked 解析 + DOMPurify 清洗，供聊天气泡渲染 markdown |
 | `src/pages/Projects.svelte` | 项目选择页：新建项目 + 项目列表（选择/删除）；是否显示由 `currentProject` store 决定（仅 `App.svelte` 在初始加载时查询 `/api/projects/current` 回填，本组件不查询，避免点击「切换 / 新建项目」后被立即跳回） |
 | `src/pages/Config.svelte` | 配置页：API 配置、故事配置（直接 PUT 保存 + 关键设定变更时提示协调）、角色管理、世界观管理、组织管理（卡片 + 成员勾选）、关系管理（卡片 + 源/目标实体选择）；任务运行时所有输入控件禁用 |
 | `src/pages/Outline.svelte` | 大纲页：直接操作按钮（生成/确认/修订意见/删除/生成后续大纲）+ 导入续写 + pending 章节内联编辑 + 流式预览 |
-| `src/pages/Writing.svelte` | 写作页：章节列表（状态点）+ 直接操作（生成/确认/修改意见，自动区分当前章修订与定向修订）+ 自动确认模式开关（toggle，随时可开关）+ 优化章节衔接（进度卡片工具栏小按钮，已确认 ≥ 2 章时显示，ConfirmModal 确认后启动批量衔接优化任务）+ 导出 TXT + 复制 + 上下章导航 + 流式自动滚动（自动确认模式下自动跟随正在生成的章节） |
+| `src/pages/Writing.svelte` | 写作页：章节列表（状态点）+ 直接操作（生成/确认/修改意见，自动区分当前章修订与定向修订）+ 自动确认模式开关（toggle，随时可开关）+ 优化章节衔接（进度卡片工具栏小按钮，已确认 ≥ 2 章时显示，ConfirmModal 确认后启动批量衔接优化任务）+ 导出 TXT + 复制 + 上下章导航 + 流式尾部窗口展示（含「仅显示最新内容」提示，字数用 streamCharCount）+ rAF 自动滚动（自动确认模式下自动跟随正在生成的章节） |
 | `src/pages/Relations.svelte` | 图谱页：Canvas 力导向图谱（ForceGraph 类），支持拖拽、滚轮缩放（以光标为中心，0.3x–3x）、hover 高亮（强调 hover 节点与其连线，次强调直接相邻节点，其余淡化） |
 | `src/pages/Assistant.svelte` | 助理页：聊天会话列表 + 消息区 + 工具调用卡片 + 流式回复 |
 | `src/pages/Skills.svelte` | 技能页：技能表格 + toggle 开关 |
-| `src/components/ChatPanel.svelte` | 右侧聊天面板：会话列表 + 停止按钮 + 任务状态/日志区（含「已生成 N 字」实时字数 badge）+ 消息区（assistant 消息 markdown 渲染）+ 工具调用卡片（中文工具名映射、危险工具红色高亮、区分 running/done）+ 流式回复 + 智能自动滚动 + 输入框自动增高 + 失败重试 banner |
+| `src/components/ChatPanel.svelte` | 右侧聊天面板：会话列表 + 停止按钮 + 任务状态/日志区（含「已生成 N 字」实时字数 badge）+ 消息区（assistant 消息 markdown 渲染）+ 工具调用卡片（中文工具名映射、危险工具红色高亮、区分 running/done）+ 流式回复 + 智能自动滚动（afterUpdate 滚动守卫：仅消息区内容实际变化时写 scrollTop）+ 输入框自动增高 + 失败重试 banner |
 | `src/components/ConfirmModal.svelte` | 全局确认弹窗组件（替代浏览器 confirm） |
 | `src/components/LogPanel.svelte` | 底部可折叠实时日志面板 |
 
@@ -168,9 +168,18 @@ func (h *Handlers) PostXxxAction(w http.ResponseWriter, r *http.Request) {
 
 `Handlers.autoConfirm`（`taskMu` 保护）为运行时开关，不持久化。`GET/PUT /api/autoconfirm` 读取/切换，任务运行期间也可随时开关。开启后 `PostChapterGenerate` 的任务 goroutine 进入循环：生成章节 → 若开关仍开启则 `ConfirmChapterAction` 自动确认 → 继续生成下一章，直到全部完成、开关被关闭（当前章生成完后停在 review 状态）、任务被取消或出错。整个循环在同一个任务锁内执行，期间仍受任务互斥保护。`GET /api/status` 返回 `auto_confirm` 字段。前端开关位于写作页进度卡片（toggle），开启时流式输出自动跟随正在生成的章节。
 
-### 流式输出节流（前端性能）
+### 流式输出节流 + 尾部窗口（前端性能）
 
-后端逐 token 推送 `content_chunk`/`chat_chunk`，前端若每个 token 都更新 store 会引发整页高频重渲染（长文本 O(n²)），导致页面无响应。`sse.js` 将 chunk 先累积到本地缓冲区，每 150ms 批量刷入 store；`stream_start` 事件（每次章节流式输出开始时由后端发出）会清空缓冲与已生成字数计数，避免事实核查重试或自动连写时新旧内容叠加。已生成字数通过 `streamCharCount` store 维护，在聊天面板任务状态栏实时显示。
+后端逐 token 推送 `content_chunk`/`chat_chunk`。节流只能降低更新频率，若 store 中保存完整流式全文，每次刷新仍需对全文重新渲染/排版（成本随长度线性增长，总成本 O(n²)），长章节会把主线程占满直至页面无响应。因此采用多层防护：
+
+- **节流缓冲**：`sse.js` 将 chunk 先累积到本地缓冲区，每 150ms 批量刷入 store
+- **尾部窗口**：章节流式全文只存 `sse.js` 模块级变量，`streamingContent` store 仅保留尾部约 3000 字符，每次刷新渲染成本恒定；写作页流式期间显示「仅显示最新内容」提示，生成结束后由 progress 重新拉取展示全文
+- **rAF 滚动**：写作页自动滚动合并到 `requestAnimationFrame`，每帧最多一次
+- **流式字数**：流式期间字数显示用 `streamCharCount` store（SSE 累计），不对全文做正则统计
+- **progress 去抖**：`progress_update` 事件触发的 `/api/progress` 拉取（含全书正文的大 JSON）500ms 内合并为一次，`task_end` 时立即刷新
+- **聊天面板滚动守卫**：`ChatPanel` 的 `afterUpdate` 仅在消息区内容实际变化时才写 `scrollTop`，`streamCharCount` 跳动不触发重排
+
+`stream_start` 事件（每次章节流式输出开始时由后端发出）会清空缓冲与已生成字数计数，避免事实核查重试或自动连写时新旧内容叠加。
 
 ### 提示词渲染
 
@@ -224,6 +233,18 @@ API 配置（`APIConfig`）与故事配置（`Config`）完全分离，分别保
 ### 流式输出
 
 `CallAPIStream` 返回流式响应，通过 `onChunk` 回调实时推送每个 token。`ContentChunk` SSE 事件用于前端实时渲染，`StreamProgress` 事件用于日志面板显示字符数进度（每 500 字触发一次）。
+
+### 大纲反向约束 + 写前一致性检查
+
+防止「后续章节安排的人物/事件提前出现」与「一次性事件（初遇、身份揭示）重复发生」的三层防线（两者是同一根因：写前面章节时看不到后续大纲，事件意外提前发生，后面又按大纲再写一遍）：
+
+1. **事前（写前检查）**：`GenerateChapterAction` 第 1 步调用 `checkOutlineConsistency`（第 1 章跳过），AI 对照前情提要 + 上一章结尾检查本章大纲是否已与实际剧情冲突（如大纲安排初遇但前文已认识），冲突时用 `revised_outline` 最小化替换本章大纲并立即落盘，再开始写正文；检查失败不阻塞（按原大纲继续）
+2. **事中（写作约束）**：`buildOutlineConstraints` 生成「全书章节脉络」块注入写作 prompt——后续 10 章大纲（严禁提前发生/剧透）+ 前文全部章节大纲（一次性事件不得重复发生）
+3. **事后（核查闭环）**：事实核查 prompt 注入本章大纲 + 章节脉络，核查范围含「提前引入后续章节事件」「一次性事件重复发生」两项，FAIL 触发最多 3 次自动重写
+
+兜底防线：`ChapterSummary` 模板含【人物动态】条目（出场人物、初次见面、身份揭示等一次性事件），若某事件已意外提前发生，后续章节的前情提要会明确记录，配合「严格承接前情」要求处理为延续而非重新发生。
+
+老项目兼容：prompts 随 `config.json` 持久化，旧模板缺新占位符时 `appendIfMissingPlaceholder` 把约束块（事实核查还含补充核查规则）追加到渲染结果末尾，保证老项目同样生效。
 
 ### 章节状态机
 
@@ -371,10 +392,10 @@ planted → progressing → resolved
 | 字段 | JSON key | 用途 |
 |------|----------|------|
 | `OutlineGeneration` | `outline_generation` | 大纲生成 |
-| `ChapterWriting` | `chapter_writing` | 章节创作 |
+| `ChapterWriting` | `chapter_writing` | 章节创作（含章节脉络反向约束） |
 | `ChapterRevision` | `chapter_revision` | 章节定向最小化修订 |
-| `ChapterSummary` | `chapter_summary` | 摘要提炼 |
-| `FactCheck` | `fact_check` | 事实核查 |
+| `ChapterSummary` | `chapter_summary` | 摘要提炼（含【人物动态】一次性事件记录） |
+| `FactCheck` | `fact_check` | 事实核查（含提前引入/重复发生检测） |
 | `OutlineRevision` | `outline_revision` | 大纲修订 |
 | `ForeshadowPlanning` | `foreshadow_planning` | 伏笔规划 |
 | `ForeshadowUpdate` | `foreshadow_update` | 伏笔状态更新 |
@@ -382,6 +403,7 @@ planted → progressing → resolved
 | `ContinuationOutlineGeneration` | `continuation_outline_generation` | 续写大纲生成 |
 | `SettingsReconciliation` | `settings_reconciliation` | 设定协调 |
 | `TransitionSmoothing` | `transition_smoothing` | 章节衔接优化（判断 + 最小化重写开头片段，无需修改时输出 NO_CHANGE） |
+| `OutlineConsistencyCheck` | `outline_consistency_check` | 写前大纲一致性检查（对照前情提要 + 上一章结尾，冲突时输出最小化修订后的本章大纲） |
 
 新增 prompt 模板时需要：(1) 在 `PromptsConfig` 添加字段，(2) 在 `DefaultPrompts` 添加默认值，(3) 在 `applyDefaults` 添加 fallback。
 
@@ -402,6 +424,7 @@ planted → progressing → resolved
 | `{{.WorldviewContext}}` | `buildWorldviewContext()` | 结构化世界观详情（从 settings 匹配） |
 | `{{.TargetWords}}` | snapshot | 每章目标字数 |
 | `{{.Foreshadows}}` | `formatActiveForeshadowsForChapter()` | 活跃伏笔上下文 |
+| `{{.OutlineConstraints}}` | `buildOutlineConstraints()` | 全书章节脉络反向约束（后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复；无内容时为空；老模板缺占位符时追加到 prompt 末尾） |
 
 ## 内置 Skill 文件
 

@@ -120,7 +120,14 @@
     autoScroll = nearBottom;
   }
 
+  // 滚动守卫：afterUpdate 在任何 store 变化（如 streamCharCount 每 150ms 跳动、
+  // 日志追加）后都会触发，无条件写 scrollTop 会造成高频强制重排。
+  // 仅在消息区内容实际变化时才滚动。
+  let lastScrollKey = '';
   afterUpdate(() => {
+    const key = msgs.length + ':' + streamingText.length + ':' + pendingTools.map(t => t.status).join(',');
+    if (key === lastScrollKey) return;
+    lastScrollKey = key;
     if (messagesContainer && autoScroll) messagesContainer.scrollTop = messagesContainer.scrollHeight;
   });
 
