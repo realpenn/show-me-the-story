@@ -4,12 +4,16 @@ import { api } from './api.js';
 let eventSource = null;
 let reconnectTimer = null;
 
-// —— 流式输出节流缓冲 ——
-// 每个 token 都直接更新 store 会导致整页高频重渲染（长文本时 O(n²)），页面卡死。
-// 这里将 chunk 先累积到缓冲区，按固定间隔批量刷入 store。
+// —— 流式输出节流缓冲 + 尾部窗口 ——
+// 节流只能降低更新频率，但若 store 中保存完整流式全文，每次刷新仍要对全文
+// 重新渲染/排版（成本随长度线性增长，总成本 O(n²)），长章节会把主线程占满
+// 直至页面无响应。因此完整文本只存模块级变量，store 仅保留尾部窗口，
+// 每次刷新渲染成本恒定 O(1)。生成结束后由 progress 重新拉取展示全文。
 const FLUSH_INTERVAL = 150;
+const TAIL_MAX = 3000; // store 中保留的尾部窗口字符数
 
 let contentBuf = '';
+let contentFull = '';
 let contentIdx = -1;
 let contentTimer = null;
 
@@ -18,18 +22,38 @@ function flushContentBuf() {
   if (!contentBuf) return;
   const text = contentBuf;
   contentBuf = '';
+  contentFull += text;
   streamingChapterIdx.set(contentIdx);
-  streamingContent.update(v => v + text);
+  streamingContent.set(contentFull.length > TAIL_MAX ? contentFull.slice(-TAIL_MAX) : contentFull);
   streamCharCount.update(n => n + Array.from(text).length);
 }
 
 function resetContentStream(idx) {
   contentBuf = '';
+  contentFull = '';
   if (contentTimer) { clearTimeout(contentTimer); contentTimer = null; }
   contentIdx = idx;
   streamingChapterIdx.set(idx);
   streamingContent.set('');
   streamCharCount.set(0);
+}
+
+// —— progress 拉取去抖 ——
+// progress_update 事件可能在短时间内连发，而 /api/progress 返回含全书正文的
+// 大 JSON，每次都拉取会造成解析 + 整页重渲染的尖峰。这里 500ms 内合并为一次。
+let progressFetchTimer = null;
+
+function refreshProgress(immediate = false) {
+  if (immediate) {
+    if (progressFetchTimer) { clearTimeout(progressFetchTimer); progressFetchTimer = null; }
+    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    return;
+  }
+  if (progressFetchTimer) return;
+  progressFetchTimer = setTimeout(() => {
+    progressFetchTimer = null;
+    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+  }, 500);
 }
 
 let chatBuf = '';
@@ -64,7 +88,7 @@ export function connectSSE() {
   });
 
   eventSource.addEventListener('progress_update', () => {
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    refreshProgress();
   });
 
   eventSource.addEventListener('task_start', e => {
@@ -97,7 +121,7 @@ export function connectSSE() {
     clearChatBuf();
     streamCharCount.set(0);
     currentTaskName.set(null);
-    api('GET', '/api/progress').then(p => progress.set(p)).catch(() => {});
+    refreshProgress(true);
 
     if (d.success) {
       const name = taskNames[d.task] || d.task;

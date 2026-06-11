@@ -41,6 +41,7 @@ type PromptsConfig struct {
 	ContinuationOutlineGeneration string `json:"continuation_outline_generation"`
 	SettingsReconciliation        string `json:"settings_reconciliation"`
 	TransitionSmoothing           string `json:"transition_smoothing"`
+	OutlineConsistencyCheck       string `json:"outline_consistency_check"`
 }
 
 func DefaultAPIConfig() *APIConfig {
@@ -178,5 +179,8 @@ func (p *PromptsConfig) applyDefaults() {
 	}
 	if p.TransitionSmoothing == "" {
 		p.TransitionSmoothing = DefaultPrompts.TransitionSmoothing
+	}
+	if p.OutlineConsistencyCheck == "" {
+		p.OutlineConsistencyCheck = DefaultPrompts.OutlineConsistencyCheck
 	}
 }
