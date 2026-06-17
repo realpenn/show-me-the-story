@@ -21,7 +21,7 @@ The program ships with no story content of its own — the genre, world, charact
 - **Foreshadow system**: AI plans foreshadows, injects active ones during writing, then tracks planted → progressing → resolved automatically; warns when a foreshadow is overdue
 - **Fact-check**: each chapter is automatically checked for consistency; failures trigger an automatic rewrite
 - **Continue an existing novel**: paste your existing text, the AI extracts settings and chapter summaries, and continues from where you left off
-- **Authorised reference rewrite (phase 1-3)**: import a TXT reference novel, analyse structure in batches, manage rewrite requests, confirm an adaptation master plan, then rewrite chapter by chapter with request-compliance / structure-fidelity / source-proximity checks
+- **Authorised reference rewrite (phase 1-4)**: import a TXT reference novel, analyse structure in batches, manage rewrite requests, confirm an adaptation master plan, then rewrite chapter by chapter with three checks; focus chapters can auditably enable full-source reference and stricter similarity thresholds
 - **De-AI polish**: built-in polish skills (forbidden AI clichés, colloquial rewriting, etc.); one-click polish per chapter from the writing page
 - **Full-book optimisation**: once finished, run diagnosis → consistency check → roadmap of fixes → automatic per-chapter revision (supports large-context models, per-volume checking, diff preview)
 - **Skill system**: built-in writing / polish skills can be toggled on; custom project-level skills are also supported
@@ -89,8 +89,9 @@ When creating a project, choose "Authorised rewrite" to switch the left navigati
 7. **Chapter-by-chapter full rewriting**: the Writing page generates the new manuscript from the confirmed target spine. Ordinary chapters use structured source analysis by default, not full source text as line-by-line reference.
 8. **Three-check loop**: after generation, each rewrite chapter is checked for request compliance, structure fidelity and source-proximity risk. Source proximity combines deterministic similarity (character n-grams, sentence overlap, long contiguous fragments) with AI judgement; failures trigger automatic rewrites and persist check results.
 9. **Mid-run request changes (minimal version)**: after plan confirmation, new or edited requests do not silently overwrite written chapters. Written affected chapters are marked needs-review / needs-rewrite, while unwritten chapter plans receive the new constraint.
+10. **Focus-chapter full-source reference**: from the Plan page, enable full source text for a chapter and record the reason. When generated, the mapped source chapter text is injected and stricter source-proximity thresholds apply.
 
-Focus-chapter full-source reference controls, stricter threshold auditing and rewrite-specific reports remain planned for later phases.
+Rewrite-specific reports and export enhancements remain planned for later phases.
 
 ### Continue an existing novel
 

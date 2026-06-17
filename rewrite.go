@@ -416,6 +416,9 @@ func ValidateRewritePlanMappings(plan *RewritePlan, reference *ReferenceBook) er
 		if len(ch.SourceChapterNums) == 0 {
 			return fmt.Errorf("新稿第 %d 章缺少原文章节映射", ch.Num)
 		}
+		if ch.UseOriginalFullText && strings.TrimSpace(ch.FullTextReason) == "" {
+			return fmt.Errorf("新稿第 %d 章启用原文全文参考时必须填写理由", ch.Num)
+		}
 		for _, sourceNum := range ch.SourceChapterNums {
 			if !sourceSet[sourceNum] {
 				return fmt.Errorf("新稿第 %d 章映射了不存在的原文章节 %d", ch.Num, sourceNum)
