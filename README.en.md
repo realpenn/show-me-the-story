@@ -90,8 +90,8 @@ When creating a project, choose "Authorised rewrite" to switch the left navigati
 8. **Three-check loop**: after generation, each rewrite chapter is checked for request compliance, structure fidelity and source-proximity risk. Source proximity combines deterministic similarity (character n-grams, sentence overlap, long contiguous fragments) with AI judgement; failures trigger automatic rewrites and persist check results.
 9. **Mid-run request changes (minimal version)**: after plan confirmation, new or edited requests do not silently overwrite written chapters. Written affected chapters are marked needs-review / needs-rewrite, while unwritten chapter plans receive the new constraint.
 10. **Focus-chapter full-source reference**: from the Plan page, enable full source text for a chapter and record the reason. When generated, the mapped source chapter text is injected and stricter source-proximity thresholds apply.
-
-Rewrite-specific reports and export enhancements remain planned for later phases.
+11. **Rewrite-specific reports**: after completion, the full-book optimisation panel can generate request implementation, source-structure fidelity, similarity-risk, and character/settings-change consistency reports. The similarity report aggregates high-risk chapters and chapters that used full source text.
+12. **TXT / Markdown export**: the Writing page exports the complete new manuscript as TXT or Markdown; each accepted/revised chapter is also saved as Markdown in the project directory.
 
 ### Continue an existing novel
 
@@ -156,6 +156,7 @@ Everything is local plain text / JSON:
         ├── reference_analysis.json # rewrite projects: structured reference analysis
         ├── rewrite_requests.json   # rewrite projects: user rewrite requests
         ├── rewrite_plan.json       # rewrite projects: adaptation master plan, mappings and chapter check results
+        ├── postprocess.json        # full-book optimisation and rewrite reports
         ├── reference/       # rewrite projects: source chapter TXT files
         ├── sessions/        # assistant chat history
         └── Chapter_XX.md    # per-chapter Markdown
