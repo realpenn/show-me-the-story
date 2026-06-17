@@ -431,4 +431,80 @@ Do not rewrite the prose, only describe the fix.`,
 [Output format]
 JSON only, nothing else:
 {"items": [{"chapter_num": 1, "type": "logic", "priority": "P0", "feedback": "concrete revision instruction", "selected": true}]}`,
+
+	ReferenceChapterAnalysis: `You are analysing an authorised reference novel that will be used for same-structure rewriting. Compress the current source chapter into structured analysis for later rewrite planning and chapter rewriting.
+
+[Chapter]
+Chapter {{.ChapterNum}}: {{.ChapterTitle}}
+
+{{.PartNote}}
+
+[Source chapter text]
+{{.ChapterContent}}
+
+Output strict JSON only:
+{
+  "num": {{.ChapterNum}},
+  "title": "chapter title",
+  "summary": "200-400 word/chinese-character equivalent summary preserving causality and character state",
+  "key_events": ["key event 1", "key event 2"],
+  "scene_function": "the chapter's structural function, e.g. setup / conflict escalation / peak / reversal / resolution",
+  "foreshadow_payoffs": ["foreshadows planted or paid off here"],
+  "emotional_curve": "the emotional curve of this chapter",
+  "ending_route": "where the ending pushes the story next",
+  "characters": ["characters appearing or materially affected in this chapter"]
+}
+
+Rules:
+1. Analyse structure, function, relationship movement and state changes only; do not retell source sentences.
+2. Do not quote consecutive source phrasing or retain signature expressions.
+3. If this is a chunk, analyse only the content actually present in this chunk.`,
+
+	ReferenceBookAnalysis: `You are building a rewrite-ready analysis file for an authorised reference novel. Based on the chapter analyses, extract the book-level structure, main settings, characters, organisations and relationship lines.
+
+[Reference metadata]
+{{.ReferenceMetadata}}
+
+[Chapter count] {{.ChapterCount}}
+
+[Structured chapter analyses]
+{{.ChapterAnalyses}}
+
+Output strict JSON only:
+{
+  "title": "reference title",
+  "story_type": "genre/type",
+  "synopsis": "500-1000 word full-book synopsis",
+  "writing_style": "observable narrative style, used to understand rhythm while avoiding source phrasing",
+  "core_setting": "worldview, cheat/power system, core rules and main driving force",
+  "global_notes": "structural points, peak distribution and ending route that rewrites must understand",
+  "settings": {
+    "characters": [
+      {
+        "name": "character name",
+        "age": "",
+        "appearance": "",
+        "personality": "personality and behaviour pattern",
+        "background": "background",
+        "motivation": "motivation",
+        "abilities": "abilities/resources",
+        "notes": "story function to preserve in the rewrite"
+      }
+    ],
+    "worldview": [
+      {"category": "rule/geography/faction/history/other", "name": "setting name", "description": "description", "tags": ""}
+    ],
+    "organizations": [
+      {"name": "organisation name", "type": "type", "description": "description", "member_names": ["member name"]}
+    ],
+    "relations": [
+      {"source_name": "character or organisation A", "source_type": "character", "target_name": "character or organisation B", "target_type": "character", "label": "relationship"}
+    ]
+  }
+}
+
+Rules:
+1. This is reference analysis, not rewrite planning; do not propose the new manuscript.
+2. Characters and settings should serve later same-structure rewriting: prefer concise, high-signal entries.
+3. Do not output source passages or signature expressions.`,
 }

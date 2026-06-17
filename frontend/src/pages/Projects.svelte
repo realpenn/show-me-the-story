@@ -1,11 +1,12 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage } from '../lib/stores.js';
+  import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage, currentProjectType, referenceState } from '../lib/stores.js';
   import { t, setLocale } from '../lib/i18n/index.js';
 
   let newProjectName = '';
   let newProjectLang = 'zh';
+  let newProjectType = 'original';
   let creating = false;
 
   onMount(loadProjects);
@@ -29,17 +30,25 @@
     try {
       await api('POST', '/api/projects/select', { name });
       currentProject.set(name);
+      currentProjectType.set('original');
+      referenceState.set(null);
       // Reload all project data
       try { progress.set(await api('GET', '/api/progress')); } catch (e) {}
       try {
         const cfg = await api('GET', '/api/config');
         config.set(cfg);
+        currentProjectType.set(cfg?.project_type || 'original');
         if (cfg && cfg.language) {
           projectLanguage.set(cfg.language);
           setLocale(cfg.language);
         }
       } catch (e) {}
       try { settings.set(await api('GET', '/api/settings')); } catch (e) {}
+      try {
+        if ((await getSelectedProjectType()) === 'rewrite') {
+          referenceState.set(await api('GET', '/api/reference'));
+        }
+      } catch (e) {}
       try { chatSessions.set(await api('GET', '/api/chat/sessions')); } catch (e) {}
       currentChatSession.set(null);
       addToast($t('projects.toast.switched', { name }), 'success');
@@ -56,7 +65,7 @@
     }
     creating = true;
     try {
-      await api('POST', '/api/projects', { name, language: newProjectLang });
+      await api('POST', '/api/projects', { name, language: newProjectLang, project_type: newProjectType });
       newProjectName = '';
       await loadProjects();
       await selectProject(name);
@@ -85,6 +94,13 @@
       createProject();
     }
   }
+
+  async function getSelectedProjectType() {
+    let type = 'original';
+    const unsubscribe = currentProjectType.subscribe(v => type = v || 'original');
+    unsubscribe();
+    return type;
+  }
 </script>
 
 <div class="flex items-center justify-center min-h-[60vh]">
@@ -100,15 +116,19 @@
     <div class="card bg-base-200 shadow-sm">
       <div class="card-body p-4">
         <h3 class="card-title text-sm">{$t('projects.create')}</h3>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap">
           <input
             type="text"
-            class="input input-sm flex-1"
+            class="input input-sm flex-1 min-w-40"
             bind:value={newProjectName}
             placeholder={$t('projects.create.placeholder')}
             on:keydown={handleKeydown}
             disabled={creating}
           />
+          <select class="select select-sm" bind:value={newProjectType} disabled={creating} title={$t('projects.create.type')}>
+            <option value="original">{$t('projects.type.original')}</option>
+            <option value="rewrite">{$t('projects.type.rewrite')}</option>
+          </select>
           <select class="select select-sm" bind:value={newProjectLang} disabled={creating} title={$t('projects.create.lang')}>
             <option value="zh">中文</option>
             <option value="en">English</option>
@@ -125,7 +145,8 @@
             {/if}
           </button>
         </div>
-        <p class="text-xs text-base-content/40 mt-1">{$t('projects.create.langHint')}</p>
+        <p class="text-xs text-base-content/40 mt-1">{$t('projects.create.typeHint')}</p>
+        <p class="text-xs text-base-content/40">{$t('projects.create.langHint')}</p>
       </div>
     </div>
 
@@ -152,6 +173,7 @@
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate flex items-center gap-2">
                     <span>{p.name}</span>
+                    <span class="badge badge-info badge-xs">{(p.project_type || 'original') === 'rewrite' ? $t('projects.type.rewriteShort') : $t('projects.type.originalShort')}</span>
                     <span class="badge badge-accent badge-xs uppercase">{(p.language || 'zh') === 'en' ? 'EN' : 'ZH'}</span>
                   </div>
                   <div class="text-xs text-base-content/40 truncate">

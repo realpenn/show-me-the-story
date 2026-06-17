@@ -12,6 +12,7 @@ The program ships with no story content of its own — the genre, world, charact
 
 - **Single executable**: one binary plus a browser, no database or other dependencies
 - **Multi-project**: each novel lives in its own project; switch / create / delete freely
+- **Project types**: choose an original-novel project or an authorised rewrite project; rewrite projects import authorised TXT reference novels and build structured reference analysis
 - **Two-phase writing**: AI first drafts a full outline for you to review and revise; once confirmed, it writes chapter by chapter
 - **Chapter review**: after each chapter, confirm or request revisions; the AI does targeted, minimal edits without disturbing other chapters
 - **Auto-confirm mode**: optional toggle that lets the AI confirm each chapter and continue automatically; can be flipped on or off at any time
@@ -20,6 +21,7 @@ The program ships with no story content of its own — the genre, world, charact
 - **Foreshadow system**: AI plans foreshadows, injects active ones during writing, then tracks planted → progressing → resolved automatically; warns when a foreshadow is overdue
 - **Fact-check**: each chapter is automatically checked for consistency; failures trigger an automatic rewrite
 - **Continue an existing novel**: paste your existing text, the AI extracts settings and chapter summaries, and continues from where you left off
+- **Authorised reference rewrite (phase 1)**: import a TXT reference novel, split and review chapters, analyse the full structure in batches, and extract candidate characters / world entries / organisations / relationships
 - **De-AI polish**: built-in polish skills (forbidden AI clichés, colloquial rewriting, etc.); one-click polish per chapter from the writing page
 - **Full-book optimisation**: once finished, run diagnosis → consistency check → roadmap of fixes → automatic per-chapter revision (supports large-context models, per-volume checking, diff preview)
 - **Skill system**: built-in writing / polish skills can be toggled on; custom project-level skills are also supported
@@ -73,6 +75,17 @@ When creating a project, you pick **Chinese** or **English**. This drives:
 The project language is fixed at creation time. The UI language defaults to the project language but can be switched independently from the top-right toggle in the header.
 
 ## Core features
+
+### Authorised reference rewrite projects
+
+When creating a project, choose "Authorised rewrite" to switch the left navigation to rewrite-specific entry points. The current phase supports:
+
+1. **TXT reference import**: the browser reads `.txt` text and submits JSON; the backend splits common chapter headings such as `Chapter N` / `第 N 章` and stores each source chapter as its own TXT file.
+2. **Chapter boundary review**: edit chapter titles and bodies, or insert chapters manually to split content. Saving clears stale analysis so old structure is not reused.
+3. **Batched reference analysis**: AI analyses each chapter/chunk into summaries, key events, scene functions, emotional curves and foreshadow payoffs, then merges that into a book-level synopsis, core setting and structural notes.
+4. **Settings candidate import**: empty projects are auto-filled from extracted settings; projects with existing settings show candidates for explicit confirmation and never silently overwrite existing data.
+
+Rewrite requests, the adaptation master plan, chapter-by-chapter full rewriting, similarity checks and rewrite-specific reports are planned for later phases.
 
 ### Continue an existing novel
 
@@ -133,6 +146,9 @@ Everything is local plain text / JSON:
         ├── config.json      # story configuration + prompts + skill flags
         ├── progress.json    # progress, outline, chapters, foreshadows
         ├── settings.json    # characters / world / organizations / relations
+        ├── reference.json   # rewrite projects: reference metadata and chapter list
+        ├── reference_analysis.json # rewrite projects: structured reference analysis
+        ├── reference/       # rewrite projects: source chapter TXT files
         ├── sessions/        # assistant chat history
         └── Chapter_XX.md    # per-chapter Markdown
 ```

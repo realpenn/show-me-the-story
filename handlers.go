@@ -23,16 +23,20 @@ type Handlers struct {
 	projectMu   sync.RWMutex
 
 	// Per-project state (updated on switchProject)
-	cfg          *Config
-	cfgPath      string
-	state        *Progress
-	progressPath string
-	settings     *ProjectSettings
-	settingsPath string
-	skills       []Skill
-	sessionsDir  string
-	postprocess     *PostProcessState
-	postprocessPath string
+	cfg                   *Config
+	cfgPath               string
+	state                 *Progress
+	progressPath          string
+	settings              *ProjectSettings
+	settingsPath          string
+	skills                []Skill
+	sessionsDir           string
+	postprocess           *PostProcessState
+	postprocessPath       string
+	reference             *ReferenceBook
+	referencePath         string
+	referenceAnalysis     *ReferenceAnalysis
+	referenceAnalysisPath string
 
 	// Task management
 	taskMu      sync.Mutex
@@ -56,6 +60,10 @@ func NewHandlers(apiCfg *APIConfig, apiCfgPath string, logger *LogBroadcaster, p
 		cfg:        DefaultConfig(),
 		state:      &Progress{Phase: "outline"},
 		settings:   &ProjectSettings{},
+		reference:  &ReferenceBook{},
+		referenceAnalysis: &ReferenceAnalysis{
+			SettingsImportStatus: ReferenceSettingsStatusNone,
+		},
 		postprocess: &PostProcessState{
 			ExecuteOptions: &PostProcessExecuteOptions{RunSmoothTransitionsFirst: true},
 		},
@@ -118,6 +126,18 @@ func (h *Handlers) switchProject(name string) error {
 		return fmt.Errorf("加载全书优化状态失败: %w", err)
 	}
 
+	referencePath := filepath.Join(projectDir, "reference.json")
+	reference, err := LoadReferenceBook(referencePath)
+	if err != nil {
+		return fmt.Errorf("加载参考书失败: %w", err)
+	}
+
+	referenceAnalysisPath := filepath.Join(projectDir, "reference_analysis.json")
+	referenceAnalysis, err := LoadReferenceAnalysis(referenceAnalysisPath)
+	if err != nil {
+		return fmt.Errorf("加载参考分析失败: %w", err)
+	}
+
 	h.projectName = name
 	h.cfg = cfg
 	h.cfgPath = configPath
@@ -129,6 +149,10 @@ func (h *Handlers) switchProject(name string) error {
 	h.sessionsDir = sessionsDir
 	h.postprocessPath = postprocessPath
 	h.postprocess = postprocess
+	h.referencePath = referencePath
+	h.reference = reference
+	h.referenceAnalysisPath = referenceAnalysisPath
+	h.referenceAnalysis = referenceAnalysis
 
 	fmt.Printf(" [系统] 已切换到项目: %s (%s)\n", name, projectDir)
 	return nil
@@ -355,6 +379,10 @@ func (h *Handlers) PutConfig(w http.ResponseWriter, r *http.Request) {
 	if newCfg.Language == "" {
 		newCfg.Language = h.cfg.Language
 	}
+	if newCfg.ProjectType == "" && h.cfg != nil {
+		newCfg.ProjectType = h.cfg.ProjectType
+	}
+	newCfg.ProjectType = NormalizeProjectType(newCfg.ProjectType)
 	newCfg.Prompts.applyDefaults(newCfg.Language)
 
 	data, err := json.MarshalIndent(newCfg, "", "  ")
@@ -1320,6 +1348,235 @@ func (h *Handlers) PostContinueConfirm(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Success("续写导入完成，已进入大纲阶段。")
 	h.writeJSON(w, http.StatusOK, h.state)
+}
+
+func (h *Handlers) ensureRewriteProject(w http.ResponseWriter) bool {
+	if !h.ensureProject(w) {
+		return false
+	}
+	if h.cfg == nil || NormalizeProjectType(h.cfg.ProjectType) != ProjectTypeRewrite {
+		h.writeError(w, http.StatusBadRequest, "当前项目不是改写项目")
+		return false
+	}
+	return true
+}
+
+func (h *Handlers) GetReference(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	h.writeJSON(w, http.StatusOK, h.referenceResponse(r.URL.Query().Get("include_content") == "1"))
+}
+
+func (h *Handlers) referenceResponse(includeContent bool) map[string]interface{} {
+	var book interface{} = h.reference
+	if includeContent && h.reference != nil {
+		book = h.referenceBookWithContent()
+	}
+	return map[string]interface{}{
+		"project_type": NormalizeProjectType(h.cfg.ProjectType),
+		"book":         book,
+		"analysis":     h.referenceAnalysis,
+	}
+}
+
+func (h *Handlers) referenceBookWithContent() map[string]interface{} {
+	chapters := make([]map[string]interface{}, 0, len(h.reference.Chapters))
+	projectDir := h.projectDir()
+	for _, ch := range h.reference.Chapters {
+		content, _ := ReadReferenceChapterContent(projectDir, ch)
+		chapters = append(chapters, map[string]interface{}{
+			"num":          ch.Num,
+			"title":        ch.Title,
+			"content_path": ch.ContentPath,
+			"rune_count":   ch.RuneCount,
+			"word_count":   ch.WordCount,
+			"content":      content,
+		})
+	}
+	return map[string]interface{}{
+		"title":        h.reference.Title,
+		"imported_at":  h.reference.ImportedAt,
+		"updated_at":   h.reference.UpdatedAt,
+		"total_runes":  h.reference.TotalRunes,
+		"source_name":  h.reference.SourceName,
+		"source_notes": h.reference.SourceNotes,
+		"chapters":     chapters,
+	}
+}
+
+func (h *Handlers) PostReferenceImport(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	var body struct {
+		Content    string `json:"content"`
+		SourceName string `json:"source_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(body.Content) == "" {
+		h.writeError(w, http.StatusBadRequest, "缺少 content 字段")
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		return
+	}
+
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("reference_import")
+		ctx := h.taskCtx
+
+		if ctx.Err() != nil {
+			h.logger.Warn("参考小说导入已取消")
+			h.logger.TaskEnd("reference_import", false)
+			return
+		}
+
+		book, err := BuildReferenceBookFromContent(h.projectDir(), body.Content, body.SourceName)
+		if err != nil {
+			h.logger.Error(fmt.Sprintf("参考小说导入失败: %v", err))
+			h.logger.TaskEnd("reference_import", false)
+			return
+		}
+		if err := SaveReferenceBook(h.referencePath, book); err != nil {
+			h.logger.Error(fmt.Sprintf("保存参考小说失败: %v", err))
+			h.logger.TaskEnd("reference_import", false)
+			return
+		}
+		h.reference = book
+		h.referenceAnalysis = &ReferenceAnalysis{SettingsImportStatus: ReferenceSettingsStatusNone}
+		if err := SaveReferenceAnalysis(h.referenceAnalysisPath, h.referenceAnalysis); err != nil {
+			h.logger.Warn(fmt.Sprintf("清空旧参考分析失败: %v", err))
+		}
+
+		h.logger.Success(fmt.Sprintf("参考小说导入完成，识别到 %d 章", len(book.Chapters)))
+		h.logger.TaskEnd("reference_import", true)
+		h.logger.Emit("reference_update", h.referenceResponse(false))
+	}()
+
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+func (h *Handlers) PutReferenceChapters(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	var body struct {
+		Chapters []ReferenceChapterUpdate `json:"chapters"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+	book, err := ReplaceReferenceChapters(h.projectDir(), h.reference, body.Chapters)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := SaveReferenceBook(h.referencePath, book); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存参考小说失败: "+err.Error())
+		return
+	}
+	h.reference = book
+	h.referenceAnalysis = &ReferenceAnalysis{SettingsImportStatus: ReferenceSettingsStatusNone}
+	if err := SaveReferenceAnalysis(h.referenceAnalysisPath, h.referenceAnalysis); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存参考分析失败: "+err.Error())
+		return
+	}
+	h.writeJSON(w, http.StatusOK, h.referenceResponse(false))
+}
+
+func (h *Handlers) PostReferenceAnalyze(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		return
+	}
+
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("reference_analyze")
+		ctx := h.taskCtx
+
+		analysis, appliedSettings, err := AnalyzeReferenceBook(ctx, h.apiCfg, h.cfg, h.settings, h.projectDir(), h.reference, h.logger)
+		if err != nil {
+			if ctx.Err() != nil {
+				h.logger.Warn("参考小说分析已取消")
+			} else {
+				h.logger.Error(fmt.Sprintf("参考小说分析失败: %v", err))
+			}
+			h.logger.TaskEnd("reference_analyze", false)
+			return
+		}
+		if appliedSettings {
+			if err := SaveProjectSettings(h.settingsPath, h.settings); err != nil {
+				h.logger.Error(fmt.Sprintf("保存参考设定失败: %v", err))
+				h.logger.TaskEnd("reference_analyze", false)
+				return
+			}
+			h.logger.SettingsUpdated()
+		}
+		if err := SaveReferenceAnalysis(h.referenceAnalysisPath, analysis); err != nil {
+			h.logger.Error(fmt.Sprintf("保存参考分析失败: %v", err))
+			h.logger.TaskEnd("reference_analyze", false)
+			return
+		}
+		h.referenceAnalysis = analysis
+
+		if appliedSettings {
+			h.logger.Success("参考分析完成，已自动填充空白设定库")
+		} else if analysis.SettingsImportStatus == ReferenceSettingsStatusPreviewRequired {
+			h.logger.Success("参考分析完成，设定候选已生成，请确认后导入")
+		} else {
+			h.logger.Success("参考分析完成")
+		}
+		h.logger.TaskEnd("reference_analyze", true)
+		h.logger.Emit("reference_update", h.referenceResponse(false))
+	}()
+
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+func (h *Handlers) PostReferenceSettingsImport(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	if h.referenceAnalysis == nil || !hasReferenceSettingsCandidate(h.referenceAnalysis.Settings) {
+		h.writeError(w, http.StatusBadRequest, "没有可导入的参考设定")
+		return
+	}
+	count := ApplyReferenceSettingsImport(h.settings, h.referenceAnalysis)
+	if count == 0 {
+		h.writeError(w, http.StatusBadRequest, "没有新的设定可导入")
+		return
+	}
+	if err := SaveProjectSettings(h.settingsPath, h.settings); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存设定失败: "+err.Error())
+		return
+	}
+	if err := SaveReferenceAnalysis(h.referenceAnalysisPath, h.referenceAnalysis); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存参考分析失败: "+err.Error())
+		return
+	}
+	h.logger.SettingsUpdated()
+	h.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"imported": count,
+		"settings": h.settings,
+		"analysis": h.referenceAnalysis,
+	})
 }
 
 func (h *Handlers) PostOutlineGenerateContinuation(w http.ResponseWriter, r *http.Request) {
