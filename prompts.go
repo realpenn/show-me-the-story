@@ -594,4 +594,121 @@ var DefaultPromptsZH = PromptsConfig{
 3. 普通章节 use_original_full_text 必须为 false；只有用户明确要求重点参考原文全文时才可设为 true，并填写 full_text_reason
 4. request_impacts 必须覆盖每条用户意见，说明影响章节/角色/设定/关系线
 5. 不要输出正文，不要摘抄原文句段或标志性表达`,
+
+	RewriteChapterWriting: `你正在为“授权参考小说同结构改写”项目撰写新稿章节。目标是：结构功能、事件推进和关系节奏基本承接参考分析与改编方案；表达、句式、段落组织、描写角度必须全部换新，不复用原文句段或标志性表达。
+
+【新稿标题】{{.Title}}
+
+【新稿总方向 / bible】
+{{.CorePrompt}}
+
+【全书梗概】
+{{.StorySynopsis}}
+
+【改编总方案】
+总方向：{{.GlobalDirection}}
+新稿核心设定：{{.CorePremise}}
+表达风格：{{.StyleGuide}}
+全篇约束：
+{{.Constraints}}
+
+【前文新稿摘要】
+{{.HistorySummary}}
+
+{{.PreviousEnding}}{{.Foreshadows}}【本章任务】
+第 {{.ChapterNum}} 章：{{.ChapterTitle}}
+本章新稿大纲：
+{{.ChapterOutline}}
+
+【本章改写计划 JSON】
+{{.ChapterPlan}}
+
+【映射原文章节的结构化参考分析（默认仅分析，不含全文）】
+{{.ReferenceAnalysis}}
+
+{{.FullTextBlock}}【影响本章的改写意见】
+{{.RewriteRequests}}
+
+【设定与关系状态】
+{{.CharacterContext}}
+{{.WorldviewContext}}
+
+{{.RetryFeedback}}
+
+创作要求：
+1. 只输出新稿正文，不输出标题、章节号、解释或清单
+2. 严格落实本章改写意见和改编方案；若意见与参考分析冲突，以改写意见和新稿 bible 为准
+3. 保留参考章节的结构功能、事件因果、人物关系推进和情绪节奏，但不要照搬原文场面调度、句式、比喻、口头禅或标志性表达
+4. 普通章节不得使用原文全文作为逐句参照；若上方没有全文块，只能依据结构化分析写作
+5. 承接前文新稿摘要和上一章结尾，避免重复已发生的一次性事件
+6. 用具体动作、对话和感官细节推进，不要写成方案复述
+7. 目标字数约 {{.TargetWords}} 字`,
+
+	RewriteComplianceCheck: `你是改写项目的严格验收编辑。请检查新稿章节是否落实本章相关改写意见与改编方案。
+
+【本章改写计划】
+{{.ChapterPlan}}
+
+【影响本章的改写意见】
+{{.RewriteRequests}}
+
+【全篇约束】
+{{.Constraints}}
+
+【待检查新稿章节】
+{{.ChapterContent}}
+
+只检查“意见是否落实”和“是否违反禁止项/全篇约束”。不要因文风喜好判失败。
+
+请严格输出 JSON：
+{"result":"PASS","issues":[],"notes":"可选说明"}
+或
+{"result":"FAIL","issues":["未落实或违反约束的具体问题"],"notes":"可选说明"}`,
+
+	StructureFidelityCheck: `你是同结构改写的结构核查员。请检查新稿章节是否保留映射原文章节的结构功能、关键事件功能、关系推进和情绪曲线，同时允许改写意见要求的变化。
+
+【参考章节结构化分析】
+{{.ReferenceAnalysis}}
+
+【本章改写计划】
+{{.ChapterPlan}}
+
+【新稿章节】
+{{.ChapterContent}}
+
+判定规则：
+1. 若新稿丢失参考分析中的核心结构功能、关键因果或关系推进，且改写计划没有要求删除，则 FAIL
+2. 若只是表达方式、场景细节、叙述角度变化，应 PASS
+3. 若改写意见要求改变某事件，以改写计划为准
+
+请严格输出 JSON：
+{"result":"PASS","issues":[],"notes":"可选说明"}
+或
+{"result":"FAIL","issues":["结构偏离的具体问题"],"notes":"可选说明"}`,
+
+	ClosenessCheck: `你是改写安全核查员。请判断新稿章节是否过度贴近参考原文。重点检查是否复用原句、标志性表达、连续长片段、独特比喻或近似段落组织。
+
+【参考章节结构化分析】
+{{.ReferenceAnalysis}}
+
+【本章改写计划】
+{{.ChapterPlan}}
+
+【确定性相似度报告】
+{{.DeterministicReport}}
+
+{{.HighRiskFragments}}
+
+{{.FullTextBlock}}【新稿章节】
+{{.ChapterContent}}
+
+判定规则：
+1. 如果确定性报告为 high，通常应判 FAIL，除非高风险片段明显只是人名/通用短语
+2. 如果存在连续复用原句、标志性表达或高度相似段落组织，判 FAIL
+3. 同结构、同事件功能本身不算失败；失败点必须落在表达或具体文本贴近上
+
+请严格输出 JSON：
+{"result":"PASS","issues":[],"notes":"可选说明"}
+或
+{"result":"FAIL","issues":["贴近风险的具体问题"],"notes":"可选说明"}`,
 }

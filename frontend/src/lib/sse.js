@@ -141,7 +141,7 @@ export function connectSSE() {
       }
     }
 
-    if (d.task === 'rewrite_plan_generate') {
+    if (d.task === 'rewrite_plan_generate' || d.task === 'rewrite_chapter_generation' || d.task === 'chapter_revision') {
       api('GET', '/api/rewrite').then(r => rewriteState.set(r)).catch(() => {});
     }
 

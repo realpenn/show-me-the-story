@@ -21,7 +21,7 @@ The program ships with no story content of its own — the genre, world, charact
 - **Foreshadow system**: AI plans foreshadows, injects active ones during writing, then tracks planted → progressing → resolved automatically; warns when a foreshadow is overdue
 - **Fact-check**: each chapter is automatically checked for consistency; failures trigger an automatic rewrite
 - **Continue an existing novel**: paste your existing text, the AI extracts settings and chapter summaries, and continues from where you left off
-- **Authorised reference rewrite (phase 1-2)**: import a TXT reference novel, split and review chapters, analyse the full structure in batches, manage rewrite requests, and generate/confirm an adaptation master plan
+- **Authorised reference rewrite (phase 1-3)**: import a TXT reference novel, analyse structure in batches, manage rewrite requests, confirm an adaptation master plan, then rewrite chapter by chapter with request-compliance / structure-fidelity / source-proximity checks
 - **De-AI polish**: built-in polish skills (forbidden AI clichés, colloquial rewriting, etc.); one-click polish per chapter from the writing page
 - **Full-book optimisation**: once finished, run diagnosis → consistency check → roadmap of fixes → automatic per-chapter revision (supports large-context models, per-volume checking, diff preview)
 - **Skill system**: built-in writing / polish skills can be toggled on; custom project-level skills are also supported
@@ -86,8 +86,11 @@ When creating a project, choose "Authorised rewrite" to switch the left navigati
 4. **Settings candidate import**: empty projects are auto-filled from extracted settings; projects with existing settings show candidates for explicit confirmation and never silently overwrite existing data.
 5. **Rewrite request management**: add global, single-chapter, chapter-range, long-running character, setting/power-rule, relationship-line, ending-route and forbidden-item requests.
 6. **Adaptation master plan**: AI generates an editable plan with request impact maps, character/setting/relationship change tables, many-to-many chapter mappings and per-target-chapter plans. Confirmation validates that every source chapter is covered, then creates the target chapter spine.
+7. **Chapter-by-chapter full rewriting**: the Writing page generates the new manuscript from the confirmed target spine. Ordinary chapters use structured source analysis by default, not full source text as line-by-line reference.
+8. **Three-check loop**: after generation, each rewrite chapter is checked for request compliance, structure fidelity and source-proximity risk. Source proximity combines deterministic similarity (character n-grams, sentence overlap, long contiguous fragments) with AI judgement; failures trigger automatic rewrites and persist check results.
+9. **Mid-run request changes (minimal version)**: after plan confirmation, new or edited requests do not silently overwrite written chapters. Written affected chapters are marked needs-review / needs-rewrite, while unwritten chapter plans receive the new constraint.
 
-Chapter-by-chapter full rewriting, similarity checks, focus-chapter full-source reference and rewrite-specific reports are planned for later phases.
+Focus-chapter full-source reference controls, stricter threshold auditing and rewrite-specific reports remain planned for later phases.
 
 ### Continue an existing novel
 
@@ -151,7 +154,7 @@ Everything is local plain text / JSON:
         ├── reference.json   # rewrite projects: reference metadata and chapter list
         ├── reference_analysis.json # rewrite projects: structured reference analysis
         ├── rewrite_requests.json   # rewrite projects: user rewrite requests
-        ├── rewrite_plan.json       # rewrite projects: adaptation master plan and mappings
+        ├── rewrite_plan.json       # rewrite projects: adaptation master plan, mappings and chapter check results
         ├── reference/       # rewrite projects: source chapter TXT files
         ├── sessions/        # assistant chat history
         └── Chapter_XX.md    # per-chapter Markdown

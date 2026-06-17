@@ -589,7 +589,12 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer h.endTask()
-		h.logger.TaskStart("chapter_generation")
+		isRewriteProject := h.cfg != nil && NormalizeProjectType(h.cfg.ProjectType) == ProjectTypeRewrite
+		taskName := "chapter_generation"
+		if isRewriteProject {
+			taskName = "rewrite_chapter_generation"
+		}
+		h.logger.TaskStart(taskName)
 		ctx := h.taskCtx
 
 		for {
@@ -600,7 +605,12 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 			}
 
 			h.logger.Info(fmt.Sprintf("正在创作第 %d 章...", chIdx+1))
-			err := GenerateChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.logger)
+			var err error
+			if isRewriteProject {
+				err = RewriteChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.reference, h.referenceAnalysis, h.rewritePlan, h.rewriteRequests, h.rewritePlanPath, h.projectDir(), h.logger)
+			} else {
+				err = GenerateChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.progressPath, h.settings, h.logger)
+			}
 
 			if err != nil {
 				if ctx.Err() != nil {
@@ -608,7 +618,7 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 				} else {
 					h.logger.Error(fmt.Sprintf("章节创作失败: %v", err))
 				}
-				h.logger.TaskEnd("chapter_generation", false)
+				h.logger.TaskEnd(taskName, false)
 				return
 			}
 
@@ -636,7 +646,7 @@ func (h *Handlers) PostChapterGenerate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		h.logger.TaskEnd("chapter_generation", true)
+		h.logger.TaskEnd(taskName, true)
 		h.broadcastProgress()
 	}()
 
@@ -698,6 +708,13 @@ func (h *Handlers) PostChapterRevise(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if h.cfg != nil && NormalizeProjectType(h.cfg.ProjectType) == ProjectTypeRewrite && h.state.CurrentChapterIndex < len(h.state.Chapters) {
+			chapterNum := h.state.Chapters[h.state.CurrentChapterIndex].Num
+			if err := RecheckRewriteChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.reference, h.referenceAnalysis, h.rewritePlan, h.rewriteRequests, h.rewritePlanPath, h.projectDir(), chapterNum, h.logger); err != nil {
+				h.logger.Warn(fmt.Sprintf("改写复核失败: %v（已保留修订结果）", err))
+			}
+		}
+
 		h.logger.Success("章节已修订。")
 		h.logger.TaskEnd("chapter_revision", true)
 		h.broadcastProgress()
@@ -746,6 +763,12 @@ func (h *Handlers) PostChapterReviseSpecific(w http.ResponseWriter, r *http.Requ
 			}
 			h.logger.TaskEnd("chapter_revision", false)
 			return
+		}
+
+		if h.cfg != nil && NormalizeProjectType(h.cfg.ProjectType) == ProjectTypeRewrite {
+			if err := RecheckRewriteChapterAction(ctx, h.apiCfg, h.cfg, h.state, h.reference, h.referenceAnalysis, h.rewritePlan, h.rewriteRequests, h.rewritePlanPath, h.projectDir(), num, h.logger); err != nil {
+				h.logger.Warn(fmt.Sprintf("改写复核失败: %v（已保留修订结果）", err))
+			}
 		}
 
 		h.logger.TaskEnd("chapter_revision", true)
@@ -1644,10 +1667,20 @@ func (h *Handlers) PostRewriteRequest(w http.ResponseWriter, r *http.Request) {
 	req.CreatedAt = now
 	req.UpdatedAt = now
 	h.rewriteRequests = append(h.rewriteRequests, req)
-	h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+	if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed {
+		ApplyConfirmedRewriteRequestChange(h.rewritePlan, h.state, req, "新增")
+	} else {
+		h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+	}
 	if err := SaveRewriteRequests(h.rewriteRequestsPath, h.rewriteRequests); err != nil {
 		h.writeError(w, http.StatusInternalServerError, "保存改写意见失败: "+err.Error())
 		return
+	}
+	if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed {
+		if err := SaveProgress(h.progressPath, h.state); err != nil {
+			h.writeError(w, http.StatusInternalServerError, "保存进度失败: "+err.Error())
+			return
+		}
 	}
 	if err := SaveRewritePlan(h.rewritePlanPath, h.rewritePlan); err != nil {
 		h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())
@@ -1680,10 +1713,20 @@ func (h *Handlers) PutRewriteRequest(w http.ResponseWriter, r *http.Request) {
 			req.CreatedAt = h.rewriteRequests[i].CreatedAt
 			req.UpdatedAt = time.Now().Format(time.RFC3339)
 			h.rewriteRequests[i] = req
-			h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+			if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed {
+				ApplyConfirmedRewriteRequestChange(h.rewritePlan, h.state, req, "更新")
+			} else {
+				h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+			}
 			if err := SaveRewriteRequests(h.rewriteRequestsPath, h.rewriteRequests); err != nil {
 				h.writeError(w, http.StatusInternalServerError, "保存改写意见失败: "+err.Error())
 				return
+			}
+			if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed {
+				if err := SaveProgress(h.progressPath, h.state); err != nil {
+					h.writeError(w, http.StatusInternalServerError, "保存进度失败: "+err.Error())
+					return
+				}
 			}
 			if err := SaveRewritePlan(h.rewritePlanPath, h.rewritePlan); err != nil {
 				h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())
@@ -1706,11 +1749,22 @@ func (h *Handlers) DeleteRewriteRequest(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	for i := range h.rewriteRequests {
 		if h.rewriteRequests[i].ID == id {
+			removed := h.rewriteRequests[i]
 			h.rewriteRequests = append(h.rewriteRequests[:i], h.rewriteRequests[i+1:]...)
-			h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+			if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed {
+				ApplyConfirmedRewriteRequestChange(h.rewritePlan, h.state, removed, "删除")
+			} else {
+				h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+			}
 			if err := SaveRewriteRequests(h.rewriteRequestsPath, h.rewriteRequests); err != nil {
 				h.writeError(w, http.StatusInternalServerError, "保存改写意见失败: "+err.Error())
 				return
+			}
+			if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed {
+				if err := SaveProgress(h.progressPath, h.state); err != nil {
+					h.writeError(w, http.StatusInternalServerError, "保存进度失败: "+err.Error())
+					return
+				}
 			}
 			if err := SaveRewritePlan(h.rewritePlanPath, h.rewritePlan); err != nil {
 				h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())

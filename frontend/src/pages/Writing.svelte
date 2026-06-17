@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, selectedChapter, autoConfirm, addToast, confirmModal } from '../lib/stores.js';
+  import { progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, selectedChapter, autoConfirm, addToast, confirmModal, currentProjectType, rewriteState } from '../lib/stores.js';
   import { t } from '../lib/i18n/index.js';
   import PostProcessPanel from '../components/PostProcessPanel.svelte';
 
@@ -17,6 +17,11 @@
       const sk = await api('GET', '/api/skills');
       hasPolishSkills = (sk || []).some(s => s.enabled && s.skill?.category === 'polish');
     } catch (e) {}
+    if ($currentProjectType === 'rewrite') {
+      try {
+        rewriteState.set(await api('GET', '/api/rewrite'));
+      } catch (e) {}
+    }
   });
 
   async function toggleAutoConfirm(e) {
@@ -57,6 +62,10 @@
   // 流式期间不对全文做正则统计，直接用 SSE 累计的字数
   $: wordCount = isStreamingThis ? $streamCharCount : (ch?.content ? ch.content.replace(/\s/g, '').length : 0);
   $: totalWords = chapters.reduce((sum, c) => sum + (c.content ? c.content.replace(/\s/g, '').length : 0), 0);
+  $: isRewriteProject = $currentProjectType === 'rewrite';
+  $: rewritePlan = $rewriteState?.plan || {};
+  $: rewriteChapterPlan = isRewriteProject && ch ? (rewritePlan.chapters || []).find(item => item.num === ch.num) : null;
+  $: rewriteCheck = rewriteChapterPlan?.last_check_result || null;
 
   $: foreshadows = p?.foreshadows || [];
   $: fsActive = foreshadows.filter(f => f.status === 'planted' || f.status === 'progressing');
@@ -181,6 +190,18 @@
       },
     });
   }
+
+  function checkClass(result) {
+    return result === 'PASS' ? 'badge-success' : result === 'FAIL' ? 'badge-error' : 'badge-ghost';
+  }
+
+  function riskClass(level) {
+    return level === 'high' ? 'badge-error' : level === 'medium' ? 'badge-warning' : 'badge-success';
+  }
+
+  function percent(value) {
+    return typeof value === 'number' ? `${Math.round(value * 100)}%` : '-';
+  }
 </script>
 
 {#if !inWriting}
@@ -291,6 +312,88 @@
                 <details class="bg-base-300 rounded">
                   <summary class="p-2 text-xs text-base-content/50 cursor-pointer select-none">{$t('writing.chapter.summary')}</summary>
                   <div class="px-2 pb-2 text-sm text-base-content/70 whitespace-pre-wrap">{ch.summary}</div>
+                </details>
+              {/if}
+
+              {#if isRewriteProject && rewriteChapterPlan}
+                <details class="bg-base-300 rounded" open={!!rewriteCheck && !rewriteCheck.passed}>
+                  <summary class="p-2 text-xs text-base-content/50 cursor-pointer select-none flex items-center gap-2">
+                    <span>{$t('writing.rewriteCheck.title')}</span>
+                    {#if rewriteChapterPlan.needs_review}
+                      <span class="badge badge-warning badge-xs">{$t('writing.rewriteCheck.needsReview')}</span>
+                    {/if}
+                    {#if rewriteChapterPlan.needs_rewrite}
+                      <span class="badge badge-error badge-xs">{$t('writing.rewriteCheck.needsRewrite')}</span>
+                    {/if}
+                  </summary>
+                  <div class="px-2 pb-2 space-y-2">
+                    {#if rewriteCheck}
+                      <div class="grid grid-cols-3 gap-2 text-xs">
+                        <div class="bg-base-200 rounded p-2">
+                          <div class="flex items-center justify-between gap-2">
+                            <span class="text-base-content/50">{$t('writing.rewriteCheck.compliance')}</span>
+                            <span class="badge badge-xs {checkClass(rewriteCheck.compliance?.result)}">{rewriteCheck.compliance?.result || '-'}</span>
+                          </div>
+                          {#if rewriteCheck.compliance?.issues?.length}
+                            <ul class="mt-1 list-disc list-inside text-error/80">
+                              {#each rewriteCheck.compliance.issues as issue}<li>{issue}</li>{/each}
+                            </ul>
+                          {/if}
+                        </div>
+                        <div class="bg-base-200 rounded p-2">
+                          <div class="flex items-center justify-between gap-2">
+                            <span class="text-base-content/50">{$t('writing.rewriteCheck.structure')}</span>
+                            <span class="badge badge-xs {checkClass(rewriteCheck.structure?.result)}">{rewriteCheck.structure?.result || '-'}</span>
+                          </div>
+                          {#if rewriteCheck.structure?.issues?.length}
+                            <ul class="mt-1 list-disc list-inside text-error/80">
+                              {#each rewriteCheck.structure.issues as issue}<li>{issue}</li>{/each}
+                            </ul>
+                          {/if}
+                        </div>
+                        <div class="bg-base-200 rounded p-2">
+                          <div class="flex items-center justify-between gap-2">
+                            <span class="text-base-content/50">{$t('writing.rewriteCheck.closeness')}</span>
+                            <span class="badge badge-xs {checkClass(rewriteCheck.closeness?.result)}">{rewriteCheck.closeness?.result || '-'}</span>
+                          </div>
+                          {#if rewriteCheck.closeness?.issues?.length}
+                            <ul class="mt-1 list-disc list-inside text-error/80">
+                              {#each rewriteCheck.closeness.issues as issue}<li>{issue}</li>{/each}
+                            </ul>
+                          {/if}
+                        </div>
+                      </div>
+
+                      {#if rewriteCheck.closeness?.deterministic}
+                        <div class="bg-base-200 rounded p-2 text-xs space-y-2">
+                          <div class="flex flex-wrap gap-2 items-center">
+                            <span class="badge badge-xs {riskClass(rewriteCheck.closeness.deterministic.risk_level)}">{rewriteCheck.closeness.deterministic.risk_level}</span>
+                            <span>{$t('writing.rewriteCheck.ngram')}: {percent(rewriteCheck.closeness.deterministic.char_ngram_overlap_ratio)}</span>
+                            <span>{$t('writing.rewriteCheck.sentence')}: {percent(rewriteCheck.closeness.deterministic.sentence_overlap_ratio)}</span>
+                            <span>{$t('writing.rewriteCheck.longest')}: {rewriteCheck.closeness.deterministic.longest_common_runes || 0}</span>
+                          </div>
+                          {#if rewriteCheck.closeness.deterministic.high_risk_fragments?.length}
+                            <div class="space-y-1">
+                              <div class="text-base-content/50">{$t('writing.rewriteCheck.fragments')}</div>
+                              {#each rewriteCheck.closeness.deterministic.high_risk_fragments as frag}
+                                <div class="rounded bg-base-300 p-2 text-warning/90">
+                                  <span class="opacity-70">{frag.reason} · {frag.runes}</span>
+                                  <div class="whitespace-pre-wrap">{frag.source}</div>
+                                </div>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      {/if}
+                    {:else}
+                      <p class="text-xs text-base-content/45">{$t('writing.rewriteCheck.empty')}</p>
+                    {/if}
+                    {#if rewriteChapterPlan.review_reasons?.length}
+                      <div class="text-xs text-warning/90">
+                        {$t('writing.rewriteCheck.reasons')}: {rewriteChapterPlan.review_reasons.join(' / ')}
+                      </div>
+                    {/if}
+                  </div>
                 </details>
               {/if}
 

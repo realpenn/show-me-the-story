@@ -68,6 +68,7 @@ type RewritePlan struct {
 	Mappings            []ChapterMapping       `json:"mappings,omitempty"`
 	Chapters            []RewriteChapterPlan   `json:"chapters,omitempty"`
 	Constraints         []string               `json:"constraints,omitempty"`
+	CheckResults        []RewriteCheckResult   `json:"check_results,omitempty"`
 }
 
 type RewriteChangeItem struct {
@@ -85,17 +86,45 @@ type RewriteRequestImpact struct {
 }
 
 type RewriteChapterPlan struct {
-	Num                  int      `json:"num"`
-	Title                string   `json:"title"`
-	Outline              string   `json:"outline"`
-	SourceChapterNums    []int    `json:"source_chapter_nums"`
-	MappingType          string   `json:"mapping_type"`
-	PreservedEvents      []string `json:"preserved_events,omitempty"`
-	ChangedEvents        []string `json:"changed_events,omitempty"`
-	ForbiddenClosePoints []string `json:"forbidden_close_points,omitempty"`
-	RequestIDs           []string `json:"request_ids,omitempty"`
-	UseOriginalFullText  bool     `json:"use_original_full_text"`
-	FullTextReason       string   `json:"full_text_reason,omitempty"`
+	Num                  int                 `json:"num"`
+	Title                string              `json:"title"`
+	Outline              string              `json:"outline"`
+	SourceChapterNums    []int               `json:"source_chapter_nums"`
+	MappingType          string              `json:"mapping_type"`
+	PreservedEvents      []string            `json:"preserved_events,omitempty"`
+	ChangedEvents        []string            `json:"changed_events,omitempty"`
+	ForbiddenClosePoints []string            `json:"forbidden_close_points,omitempty"`
+	RequestIDs           []string            `json:"request_ids,omitempty"`
+	UseOriginalFullText  bool                `json:"use_original_full_text"`
+	FullTextReason       string              `json:"full_text_reason,omitempty"`
+	NeedsReview          bool                `json:"needs_review,omitempty"`
+	NeedsRewrite         bool                `json:"needs_rewrite,omitempty"`
+	ReviewReasons        []string            `json:"review_reasons,omitempty"`
+	LastCheckResult      *RewriteCheckResult `json:"last_check_result,omitempty"`
+}
+
+type RewriteCheckResult struct {
+	ChapterNum    int                         `json:"chapter_num"`
+	Attempt       int                         `json:"attempt"`
+	Passed        bool                        `json:"passed"`
+	Compliance    RewriteAICheckResult        `json:"compliance"`
+	Structure     RewriteAICheckResult        `json:"structure"`
+	Closeness     RewriteClosenessCheckResult `json:"closeness"`
+	RetryFeedback []string                    `json:"retry_feedback,omitempty"`
+	CheckedAt     string                      `json:"checked_at,omitempty"`
+}
+
+type RewriteAICheckResult struct {
+	Result string   `json:"result"`
+	Issues []string `json:"issues,omitempty"`
+	Notes  string   `json:"notes,omitempty"`
+}
+
+type RewriteClosenessCheckResult struct {
+	Result        string           `json:"result"`
+	Issues        []string         `json:"issues,omitempty"`
+	Notes         string           `json:"notes,omitempty"`
+	Deterministic SimilarityResult `json:"deterministic"`
 }
 
 func LoadRewriteRequests(path string) ([]RewriteRequest, error) {
@@ -145,6 +174,39 @@ func SaveRewritePlan(path string, plan *RewritePlan) error {
 		return fmt.Errorf("序列化改编方案失败: %w", err)
 	}
 	return writeFileAtomic(path, data)
+}
+
+func FindRewriteChapterPlan(plan *RewritePlan, chapterNum int) (int, *RewriteChapterPlan) {
+	if plan == nil {
+		return -1, nil
+	}
+	for i := range plan.Chapters {
+		if plan.Chapters[i].Num == chapterNum {
+			return i, &plan.Chapters[i]
+		}
+	}
+	return -1, nil
+}
+
+func UpsertRewriteCheckResult(plan *RewritePlan, result RewriteCheckResult) {
+	if plan == nil || result.ChapterNum <= 0 {
+		return
+	}
+	result.CheckedAt = defaultString(result.CheckedAt, time.Now().Format(time.RFC3339))
+	plan.CheckResults = append(plan.CheckResults, result)
+	if len(plan.CheckResults) > 200 {
+		plan.CheckResults = plan.CheckResults[len(plan.CheckResults)-200:]
+	}
+	if _, ch := FindRewriteChapterPlan(plan, result.ChapterNum); ch != nil {
+		ch.LastCheckResult = &result
+		ch.NeedsReview = !result.Passed
+		ch.NeedsRewrite = !result.Passed
+		if result.Passed {
+			ch.ReviewReasons = nil
+		} else {
+			ch.ReviewReasons = appendRewriteUniqueStrings(ch.ReviewReasons, result.RetryFeedback...)
+		}
+	}
 }
 
 func NextRewriteRequestID(requests []RewriteRequest) string {
@@ -554,6 +616,165 @@ func joinInts(values []int, sep string) string {
 		parts[i] = fmt.Sprintf("%d", v)
 	}
 	return strings.Join(parts, sep)
+}
+
+func ApplyConfirmedRewriteRequestChange(plan *RewritePlan, state *Progress, req RewriteRequest, action string) bool {
+	if plan == nil || plan.Status != RewritePlanStatusConfirmed || state == nil || req.ID == "" {
+		return false
+	}
+	affected := affectedChaptersForRewriteRequest(plan, state, req)
+	if len(affected) == 0 {
+		return false
+	}
+	reason := fmt.Sprintf("%s改写意见 %s：%s", action, req.ID, req.Instruction)
+	changed := false
+	for _, chapterNum := range affected {
+		_, planCh := FindRewriteChapterPlan(plan, chapterNum)
+		if planCh == nil {
+			continue
+		}
+		stateIdx := findStateChapterIndex(state, chapterNum)
+		written := stateIdx >= 0 && (state.Chapters[stateIdx].Content != "" || state.Chapters[stateIdx].Status == StatusReview || state.Chapters[stateIdx].Status == StatusAccepted)
+		if written {
+			planCh.NeedsReview = true
+			planCh.NeedsRewrite = true
+			planCh.ReviewReasons = appendRewriteUniqueStrings(planCh.ReviewReasons, reason)
+			changed = true
+			continue
+		}
+		if !containsString(planCh.RequestIDs, req.ID) {
+			planCh.RequestIDs = append(planCh.RequestIDs, req.ID)
+			changed = true
+		}
+		pendingNote := "新增约束：" + req.Instruction
+		if action != "新增" {
+			pendingNote = action + "约束：" + req.Instruction
+		}
+		if !containsString(planCh.ChangedEvents, pendingNote) {
+			planCh.ChangedEvents = append(planCh.ChangedEvents, pendingNote)
+			changed = true
+		}
+		planCh.NeedsReview = true
+		planCh.ReviewReasons = appendRewriteUniqueStrings(planCh.ReviewReasons, reason)
+		if stateIdx >= 0 && state.Chapters[stateIdx].Status == StatusPending {
+			state.Chapters[stateIdx].Outline = rewriteChapterPlanOutline(*planCh)
+			changed = true
+		}
+	}
+	return changed
+}
+
+func affectedChaptersForRewriteRequest(plan *RewritePlan, state *Progress, req RewriteRequest) []int {
+	allNums := make([]int, 0, len(plan.Chapters))
+	for _, ch := range plan.Chapters {
+		allNums = append(allNums, ch.Num)
+	}
+	if len(allNums) == 0 {
+		return nil
+	}
+
+	seen := make(map[int]bool)
+	addRange := func(start, end int) {
+		if start <= 0 {
+			start = allNums[0]
+		}
+		if end <= 0 {
+			end = allNums[len(allNums)-1]
+		}
+		if end < start {
+			start, end = end, start
+		}
+		for _, num := range allNums {
+			if num >= start && num <= end {
+				seen[num] = true
+			}
+		}
+	}
+
+	switch req.Type {
+	case RewriteRequestTypeChapter:
+		start := req.ChapterNum
+		if start <= 0 {
+			start = req.ChapterStart
+		}
+		if req.AffectsFollowing {
+			addRange(start, 0)
+		} else {
+			addRange(start, start)
+		}
+	case RewriteRequestTypeRange:
+		end := req.ChapterEnd
+		if req.AffectsFollowing {
+			end = 0
+		}
+		addRange(req.ChapterStart, end)
+	default:
+		if req.AffectsFollowing && state.CurrentChapterIndex < len(state.Chapters) {
+			addRange(state.Chapters[state.CurrentChapterIndex].Num, 0)
+		} else {
+			addRange(0, 0)
+		}
+	}
+
+	for _, impact := range plan.RequestImpacts {
+		if impact.RequestID != req.ID {
+			continue
+		}
+		for _, num := range impact.AffectedChapters {
+			seen[num] = true
+		}
+	}
+
+	out := make([]int, 0, len(seen))
+	for _, num := range allNums {
+		if seen[num] {
+			out = append(out, num)
+		}
+	}
+	return out
+}
+
+func findStateChapterIndex(state *Progress, chapterNum int) int {
+	if state == nil {
+		return -1
+	}
+	for i := range state.Chapters {
+		if state.Chapters[i].Num == chapterNum {
+			return i
+		}
+	}
+	return -1
+}
+
+func appendRewriteUniqueStrings(base []string, values ...string) []string {
+	seen := make(map[string]bool, len(base)+len(values))
+	out := make([]string, 0, len(base)+len(values))
+	for _, item := range base {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	for _, item := range values {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeRewriteRequestType(t string) string {

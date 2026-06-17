@@ -115,6 +115,148 @@ func GenerateChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, 
 	return nil
 }
 
+func RewriteChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, progressPath string, settings *ProjectSettings, reference *ReferenceBook, analysis *ReferenceAnalysis, plan *RewritePlan, requests []RewriteRequest, planPath string, projectDir string, logger *LogBroadcaster) error {
+	if err := validateAPIConfig(apiCfg); err != nil {
+		return err
+	}
+	if NormalizeProjectType(cfg.ProjectType) != ProjectTypeRewrite {
+		return fmt.Errorf("当前项目不是改写项目")
+	}
+	if state.Phase != "writing" {
+		return fmt.Errorf("当前不在写作阶段")
+	}
+	if plan == nil || plan.Status != RewritePlanStatusConfirmed {
+		return fmt.Errorf("请先确认改编总方案")
+	}
+	if reference == nil || len(reference.Chapters) == 0 || analysis == nil || len(analysis.Chapters) == 0 {
+		return fmt.Errorf("请先完成参考小说导入与分析")
+	}
+	if state.CurrentChapterIndex >= len(state.Chapters) {
+		return fmt.Errorf("所有章节已完成")
+	}
+
+	i := state.CurrentChapterIndex
+	ch := &state.Chapters[i]
+	if ch.Status == StatusAccepted {
+		return fmt.Errorf("第 %d 章已确认，请确认当前章节或重置进度", ch.Num)
+	}
+
+	_, chapterPlan := FindRewriteChapterPlan(plan, ch.Num)
+	if chapterPlan == nil {
+		return fmt.Errorf("改编方案中缺少第 %d 章计划", ch.Num)
+	}
+	sourceText, err := buildMappedReferenceSourceText(projectDir, reference, chapterPlan.SourceChapterNums)
+	if err != nil {
+		return err
+	}
+
+	ch.Status = StatusWriting
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+
+	logger.Info(fmt.Sprintf("开始改写第 %d 章: 《%s》", ch.Num, ch.Title))
+	maxRewriteRetries := 3
+	retryFeedback := ""
+
+	for attempt := 0; attempt <= maxRewriteRetries; attempt++ {
+		if ctx.Err() != nil {
+			return fmt.Errorf("任务已取消")
+		}
+		logger.StepInfo(1, 4, "正在根据改编方案撰写新稿正文...")
+		content := generateRewriteChapterContentStreamWithRetryLog(ctx, apiCfg, cfg, state, i, settings, analysis, plan, chapterPlan, requests, sourceText, retryFeedback, logger)
+		if content == "" {
+			return fmt.Errorf("改写正文生成失败或被取消")
+		}
+		ch.Content = content
+		logger.Info(fmt.Sprintf("新稿正文撰写完毕，共 %d 字", len([]rune(content))))
+
+		logger.StepInfo(2, 4, "正在提炼本章新稿摘要...")
+		summary := generateChapterSummaryWithRetryLog(ctx, apiCfg, cfg, content, logger)
+		if summary == "" {
+			return fmt.Errorf("摘要提炼失败或被取消")
+		}
+		ch.Summary = summary
+		logger.Info("摘要提炼完成")
+
+		logger.StepInfo(3, 4, "正在执行改写三项检查...")
+		checkResult, err := runRewriteChapterChecks(ctx, apiCfg, cfg, state, i, analysis, plan, chapterPlan, requests, sourceText, content, attempt+1, logger)
+		if err != nil {
+			return err
+		}
+		UpsertRewriteCheckResult(plan, checkResult)
+		if err := SaveRewritePlan(planPath, plan); err != nil {
+			return err
+		}
+
+		if !checkResult.Passed {
+			retryFeedback = formatRewriteRetryFeedback(checkResult, cfg.Language)
+			if attempt < maxRewriteRetries {
+				logger.Warn(fmt.Sprintf("[改写检查] 第 %d 章未通过，正在自动重写（第 %d 次重试）...", ch.Num, attempt+1))
+				logger.Warn(strings.Join(checkResult.RetryFeedback, "；"))
+				continue
+			}
+			logger.Warn("[改写检查] 已达最大重试次数，保留当前版本并标记需复核。")
+		} else {
+			logger.Info("[改写检查] 三项检查通过 ✓")
+		}
+		break
+	}
+
+	if len(state.Foreshadows) > 0 {
+		logger.StepInfo(4, 4, "正在更新伏笔状态...")
+		syncForeshadowsAfterChapter(ctx, apiCfg, cfg, state, i, progressPath, logger)
+	}
+
+	SaveChapterMarkdown(filepath.Dir(progressPath), *ch, state.Title)
+
+	ch.Status = StatusReview
+	state.CurrentChapterIndex = i
+	if err := SaveProgress(progressPath, state); err != nil {
+		return err
+	}
+
+	logger.Success(fmt.Sprintf("第 %d 章改写完成！", ch.Num))
+	return nil
+}
+
+func RecheckRewriteChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, reference *ReferenceBook, analysis *ReferenceAnalysis, plan *RewritePlan, requests []RewriteRequest, planPath string, projectDir string, chapterNum int, logger *LogBroadcaster) error {
+	if NormalizeProjectType(cfg.ProjectType) != ProjectTypeRewrite || plan == nil || plan.Status != RewritePlanStatusConfirmed {
+		return nil
+	}
+	idx := findStateChapterIndex(state, chapterNum)
+	if idx < 0 {
+		return fmt.Errorf("第 %d 章不存在", chapterNum)
+	}
+	ch := state.Chapters[idx]
+	if strings.TrimSpace(ch.Content) == "" {
+		return fmt.Errorf("第 %d 章尚无正文，无法复核", chapterNum)
+	}
+	_, chapterPlan := FindRewriteChapterPlan(plan, chapterNum)
+	if chapterPlan == nil {
+		return fmt.Errorf("改编方案中缺少第 %d 章计划", chapterNum)
+	}
+	sourceText, err := buildMappedReferenceSourceText(projectDir, reference, chapterPlan.SourceChapterNums)
+	if err != nil {
+		return err
+	}
+	logger.Info(fmt.Sprintf("正在复核第 %d 章的改写检查结果...", chapterNum))
+	checkResult, err := runRewriteChapterChecks(ctx, apiCfg, cfg, state, idx, analysis, plan, chapterPlan, requests, sourceText, ch.Content, 1, logger)
+	if err != nil {
+		return err
+	}
+	UpsertRewriteCheckResult(plan, checkResult)
+	if err := SaveRewritePlan(planPath, plan); err != nil {
+		return err
+	}
+	if checkResult.Passed {
+		logger.Info("[改写复核] 三项检查通过 ✓")
+	} else {
+		logger.Warn("[改写复核] 仍有问题，已在方案中标记需复核。")
+	}
+	return nil
+}
+
 // parseFactCheckResult 解析事实核查结果。
 // 优先解析 JSON 中的 result 字段，解析失败时退化为字符串匹配。
 func parseFactCheckResult(raw string) (failed bool, issues string) {
@@ -418,6 +560,398 @@ func generateChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *APICo
 			return ""
 		}
 	}
+}
+
+func generateRewriteChapterContentStream(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, analysis *ReferenceAnalysis, plan *RewritePlan, chapterPlan *RewriteChapterPlan, requests []RewriteRequest, sourceText string, retryFeedback string, logger *LogBroadcaster) (string, error) {
+	ch := state.Chapters[idx]
+	lang := cfg.Language
+	snapshot := state.StoryConfigSnapshot
+	if snapshot == nil {
+		snapshot = &cfg.Story
+	}
+
+	chapterPlanJSON := mustMarshalIndent(chapterPlan)
+	referenceAnalysis := formatReferenceAnalysisForRewrite(analysis, chapterPlan.SourceChapterNums)
+	requestsText := formatRewriteRequestsForChapter(plan, state, requests, *chapterPlan, ch.Num, lang)
+	constraints := formatRewritePlanConstraints(plan, lang)
+	foreshadowContext := formatActiveForeshadowsForChapterLang(state.Foreshadows, ch.Num, lang)
+	characterContext := buildCharacterContextForLang(settings, ch.Outline, lang)
+	worldviewContext := buildWorldviewContextForLang(settings, ch.Outline, lang)
+
+	userPrompt := RenderPrompt(cfg.Prompts.RewriteChapterWriting, map[string]string{
+		"Title":             preferUserValue(cfg.Story.Title, state.Title),
+		"CorePrompt":        state.CorePrompt,
+		"StorySynopsis":     preferUserValue(cfg.Story.StorySynopsis, state.StorySynopsis),
+		"GlobalDirection":   plan.GlobalDirection,
+		"CorePremise":       plan.CorePremise,
+		"StyleGuide":        defaultString(plan.StyleGuide, cfg.Story.WritingStyle),
+		"Constraints":       constraints,
+		"HistorySummary":    buildHistorySummaryForLang(state, idx, lang),
+		"PreviousEnding":    buildPreviousChapterTailForLang(state, idx, lang),
+		"Foreshadows":       foreshadowContext,
+		"ChapterNum":        fmt.Sprintf("%d", ch.Num),
+		"ChapterTitle":      ch.Title,
+		"ChapterOutline":    ch.Outline,
+		"ChapterPlan":       chapterPlanJSON,
+		"ReferenceAnalysis": referenceAnalysis,
+		"FullTextBlock":     formatRewriteFullTextBlock(sourceText, chapterPlan.UseOriginalFullText, lang),
+		"RewriteRequests":   requestsText,
+		"CharacterContext":  characterContext,
+		"WorldviewContext":  worldviewContext,
+		"RetryFeedback":     retryFeedback,
+		"TargetWords":       fmt.Sprintf("%d", snapshot.TargetWordsPerChapter),
+	})
+
+	systemPrompt := state.CorePrompt
+	if systemPrompt == "" {
+		systemPrompt = SystemPromptFor(lang, "author_default")
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		systemPrompt += "\nYou are writing an authorised same-structure rewrite. Preserve structural function but create wholly new expression and avoid source phrasing reuse."
+	} else {
+		systemPrompt += "\n你正在执行授权同结构改写：保留结构功能，但必须生成全新表达，避免复用原文句段。"
+	}
+
+	totalChars := 0
+	nextReport := 500
+	onChunk := func(chunk string) {
+		logger.ContentChunk(idx, chunk)
+		totalChars += len([]rune(chunk))
+		if totalChars >= nextReport {
+			logger.StreamProgress(idx, totalChars)
+			nextReport += 500
+		}
+	}
+
+	logger.StreamStart(idx)
+	return CallAPIStream(ctx, apiCfg, systemPrompt, userPrompt, onChunk)
+}
+
+func generateRewriteChapterContentStreamWithRetryLog(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, settings *ProjectSettings, analysis *ReferenceAnalysis, plan *RewritePlan, chapterPlan *RewriteChapterPlan, requests []RewriteRequest, sourceText string, retryFeedback string, logger *LogBroadcaster) string {
+	retryCount := 0
+	for {
+		if ctx.Err() != nil {
+			return ""
+		}
+		content, err := generateRewriteChapterContentStream(ctx, apiCfg, cfg, state, idx, settings, analysis, plan, chapterPlan, requests, sourceText, retryFeedback, logger)
+		if err == nil && content != "" {
+			return content
+		}
+		if isFatalAPIError(err) {
+			logger.Error(fmt.Sprintf("致命错误: %v，不再重试", err))
+			return ""
+		}
+
+		retryCount++
+		waitTime := getWaitTime(retryCount)
+		logger.Warn(fmt.Sprintf("改写正文生成失败: %v。第 %d 次重试，等待 %ds...", err, retryCount, waitTime))
+		select {
+		case <-time.After(time.Duration(waitTime) * time.Second):
+		case <-ctx.Done():
+			return ""
+		}
+	}
+}
+
+func runRewriteChapterChecks(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, analysis *ReferenceAnalysis, plan *RewritePlan, chapterPlan *RewriteChapterPlan, requests []RewriteRequest, sourceText string, content string, attempt int, logger *LogBroadcaster) (RewriteCheckResult, error) {
+	ch := state.Chapters[idx]
+	lang := cfg.Language
+	chapterPlanJSON := mustMarshalIndent(chapterPlan)
+	referenceAnalysis := formatReferenceAnalysisForRewrite(analysis, chapterPlan.SourceChapterNums)
+	requestsText := formatRewriteRequestsForChapter(plan, state, requests, *chapterPlan, ch.Num, lang)
+	constraints := formatRewritePlanConstraints(plan, lang)
+
+	compliancePrompt := RenderPrompt(cfg.Prompts.RewriteComplianceCheck, map[string]string{
+		"ChapterPlan":     chapterPlanJSON,
+		"RewriteRequests": requestsText,
+		"Constraints":     constraints,
+		"ChapterContent":  content,
+	})
+	complianceRaw := CallAPIWithRetryLog(ctx, apiCfg, SystemPromptFor(lang, "rewrite_planner_json"), compliancePrompt, logger)
+	if complianceRaw == "" {
+		return RewriteCheckResult{}, fmt.Errorf("改写意见符合度检查失败或被取消")
+	}
+	compliance := parseRewriteAICheckResult(complianceRaw)
+
+	structurePrompt := RenderPrompt(cfg.Prompts.StructureFidelityCheck, map[string]string{
+		"ReferenceAnalysis": referenceAnalysis,
+		"ChapterPlan":       chapterPlanJSON,
+		"ChapterContent":    content,
+	})
+	structureRaw := CallAPIWithRetryLog(ctx, apiCfg, SystemPromptFor(lang, "rewrite_planner_json"), structurePrompt, logger)
+	if structureRaw == "" {
+		return RewriteCheckResult{}, fmt.Errorf("结构保真检查失败或被取消")
+	}
+	structure := parseRewriteAICheckResult(structureRaw)
+
+	similarity := AssessSimilarity(sourceText, content, chapterPlan.UseOriginalFullText)
+	closenessPrompt := RenderPrompt(cfg.Prompts.ClosenessCheck, map[string]string{
+		"ReferenceAnalysis":   referenceAnalysis,
+		"ChapterPlan":         chapterPlanJSON,
+		"DeterministicReport": mustMarshalIndent(similarity),
+		"HighRiskFragments":   formatSimilarityFragmentsForPrompt(similarity, lang),
+		"FullTextBlock":       formatRewriteFullTextBlock(sourceText, chapterPlan.UseOriginalFullText, lang),
+		"ChapterContent":      content,
+	})
+	closenessRaw := CallAPIWithRetryLog(ctx, apiCfg, SystemPromptFor(lang, "rewrite_planner_json"), closenessPrompt, logger)
+	if closenessRaw == "" {
+		return RewriteCheckResult{}, fmt.Errorf("贴近原文风险检查失败或被取消")
+	}
+	closenessAI := parseRewriteAICheckResult(closenessRaw)
+	closeness := RewriteClosenessCheckResult{
+		Result:        closenessAI.Result,
+		Issues:        closenessAI.Issues,
+		Notes:         closenessAI.Notes,
+		Deterministic: similarity,
+	}
+	if similarity.RiskLevel == "high" && !strings.EqualFold(closeness.Result, "FAIL") {
+		closeness.Result = "FAIL"
+		closeness.Issues = appendRewriteUniqueStrings(closeness.Issues, "确定性相似度报告为 high，需重写以降低贴近风险")
+	}
+
+	result := RewriteCheckResult{
+		ChapterNum: ch.Num,
+		Attempt:    attempt,
+		Compliance: compliance,
+		Structure:  structure,
+		Closeness:  closeness,
+		CheckedAt:  time.Now().Format(time.RFC3339),
+	}
+	result.Passed = rewriteCheckPassed(result.Compliance) && rewriteCheckPassed(result.Structure) && rewriteCheckPassed(RewriteAICheckResult{Result: result.Closeness.Result})
+	result.RetryFeedback = collectRewriteCheckIssues(result, lang)
+	return result, nil
+}
+
+func parseRewriteAICheckResult(raw string) RewriteAICheckResult {
+	cleaned := cleanJSONResponse(raw)
+	var resp RewriteAICheckResult
+	if jsonStr := extractJSON(cleaned); jsonStr != "" {
+		if err := json.Unmarshal([]byte(jsonStr), &resp); err == nil && resp.Result != "" {
+			resp.Result = strings.ToUpper(strings.TrimSpace(resp.Result))
+			return resp
+		}
+	}
+	if strings.Contains(strings.ToUpper(raw), "FAIL") {
+		return RewriteAICheckResult{Result: "FAIL", Issues: []string{truncate(raw, 300)}}
+	}
+	return RewriteAICheckResult{Result: "FAIL", Issues: []string{"核查结果无法解析"}}
+}
+
+func rewriteCheckPassed(check RewriteAICheckResult) bool {
+	return strings.EqualFold(strings.TrimSpace(check.Result), "PASS")
+}
+
+func collectRewriteCheckIssues(result RewriteCheckResult, lang string) []string {
+	var issues []string
+	add := func(prefix string, values []string) {
+		if len(values) == 0 {
+			issues = append(issues, prefix)
+			return
+		}
+		for _, item := range values {
+			item = strings.TrimSpace(item)
+			if item != "" {
+				issues = append(issues, prefix+"："+item)
+			}
+		}
+	}
+	if !rewriteCheckPassed(result.Compliance) {
+		add(labelForRewriteCheck("compliance", lang), result.Compliance.Issues)
+	}
+	if !rewriteCheckPassed(result.Structure) {
+		add(labelForRewriteCheck("structure", lang), result.Structure.Issues)
+	}
+	if !strings.EqualFold(result.Closeness.Result, "PASS") {
+		add(labelForRewriteCheck("closeness", lang), result.Closeness.Issues)
+	}
+	return appendRewriteUniqueStrings(nil, issues...)
+}
+
+func labelForRewriteCheck(name, lang string) string {
+	if NormalizeLanguage(lang) == LangEN {
+		switch name {
+		case "compliance":
+			return "Request compliance"
+		case "structure":
+			return "Structure fidelity"
+		case "closeness":
+			return "Source proximity"
+		}
+	}
+	switch name {
+	case "compliance":
+		return "改写意见符合度"
+	case "structure":
+		return "结构保真"
+	case "closeness":
+		return "贴近原文风险"
+	}
+	return name
+}
+
+func formatRewriteRetryFeedback(result RewriteCheckResult, lang string) string {
+	issues := result.RetryFeedback
+	if len(issues) == 0 {
+		return ""
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return "[Previous rewrite checks failed. Regenerate the chapter and fix these points]\n- " + strings.Join(issues, "\n- ")
+	}
+	return "【上一轮改写检查未通过，请重写并修复以下问题】\n- " + strings.Join(issues, "\n- ")
+}
+
+func buildMappedReferenceSourceText(projectDir string, reference *ReferenceBook, sourceNums []int) (string, error) {
+	if reference == nil {
+		return "", fmt.Errorf("参考小说缺失")
+	}
+	var parts []string
+	for _, num := range sourceNums {
+		refCh := findReferenceChapter(reference, num)
+		if refCh == nil {
+			return "", fmt.Errorf("找不到映射的原文第 %d 章", num)
+		}
+		content, err := ReadReferenceChapterContent(projectDir, *refCh)
+		if err != nil {
+			return "", fmt.Errorf("读取原文第 %d 章失败: %w", num, err)
+		}
+		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
+func formatReferenceAnalysisForRewrite(analysis *ReferenceAnalysis, sourceNums []int) string {
+	if analysis == nil {
+		return ""
+	}
+	var selected []ReferenceChapterAnalysis
+	for _, num := range sourceNums {
+		found := false
+		for _, ch := range analysis.Chapters {
+			if ch.Num == num {
+				selected = append(selected, ch)
+				found = true
+				break
+			}
+		}
+		if !found {
+			selected = append(selected, ReferenceChapterAnalysis{Num: num, Title: fmt.Sprintf("Chapter %d", num)})
+		}
+	}
+	payload := struct {
+		BookSynopsis string                     `json:"book_synopsis,omitempty"`
+		CoreSetting  string                     `json:"core_setting,omitempty"`
+		GlobalNotes  string                     `json:"global_notes,omitempty"`
+		Chapters     []ReferenceChapterAnalysis `json:"chapters"`
+	}{
+		BookSynopsis: analysis.Synopsis,
+		CoreSetting:  analysis.CoreSetting,
+		GlobalNotes:  analysis.GlobalNotes,
+		Chapters:     selected,
+	}
+	return mustMarshalIndent(payload)
+}
+
+func formatRewriteRequestsForChapter(plan *RewritePlan, state *Progress, requests []RewriteRequest, chapterPlan RewriteChapterPlan, chapterNum int, lang string) string {
+	var selected []RewriteRequest
+	for _, req := range requests {
+		if rewriteRequestAppliesToChapter(plan, state, req, chapterPlan, chapterNum) {
+			selected = append(selected, req)
+		}
+	}
+	if len(selected) == 0 {
+		if NormalizeLanguage(lang) == LangEN {
+			return "None."
+		}
+		return "无。"
+	}
+	return mustMarshalIndent(selected)
+}
+
+func rewriteRequestAppliesToChapter(plan *RewritePlan, state *Progress, req RewriteRequest, chapterPlan RewriteChapterPlan, chapterNum int) bool {
+	if containsString(chapterPlan.RequestIDs, req.ID) {
+		return true
+	}
+	switch req.Type {
+	case RewriteRequestTypeGlobal, RewriteRequestTypeForbidden:
+		return true
+	case RewriteRequestTypeChapter:
+		if req.ChapterNum == chapterNum || req.ChapterStart == chapterNum {
+			return true
+		}
+		if req.AffectsFollowing {
+			start := req.ChapterNum
+			if start <= 0 {
+				start = req.ChapterStart
+			}
+			return chapterNum >= start
+		}
+	case RewriteRequestTypeRange:
+		start, end := req.ChapterStart, req.ChapterEnd
+		if req.AffectsFollowing {
+			return chapterNum >= start
+		}
+		return chapterNum >= start && chapterNum <= end
+	default:
+		for _, num := range affectedChaptersForRewriteRequest(plan, state, req) {
+			if num == chapterNum {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func formatRewritePlanConstraints(plan *RewritePlan, lang string) string {
+	if plan == nil || len(plan.Constraints) == 0 {
+		if NormalizeLanguage(lang) == LangEN {
+			return "None."
+		}
+		return "无。"
+	}
+	return "- " + strings.Join(plan.Constraints, "\n- ")
+}
+
+func formatRewriteFullTextBlock(sourceText string, enabled bool, lang string) string {
+	if !enabled {
+		return ""
+	}
+	if NormalizeLanguage(lang) == LangEN {
+		return "[Audited full-source reference enabled for this focus chapter]\n" + truncate(sourceText, 30000) + "\n\n"
+	}
+	return "【本章已启用可审计原文全文参考】\n" + truncate(sourceText, 30000) + "\n\n"
+}
+
+func formatSimilarityFragmentsForPrompt(result SimilarityResult, lang string) string {
+	if len(result.HighRiskFragments) == 0 {
+		if NormalizeLanguage(lang) == LangEN {
+			return "[High-risk fragments]\nNone.\n"
+		}
+		return "【高风险片段】\n无。\n"
+	}
+	var sb strings.Builder
+	if NormalizeLanguage(lang) == LangEN {
+		sb.WriteString("[High-risk fragments detected by deterministic checks]\n")
+	} else {
+		sb.WriteString("【确定性检查命中的高风险片段】\n")
+	}
+	for _, frag := range result.HighRiskFragments {
+		sb.WriteString("- ")
+		sb.WriteString(frag.Reason)
+		sb.WriteString(" (")
+		sb.WriteString(fmt.Sprintf("%d", frag.Runes))
+		sb.WriteString("): ")
+		sb.WriteString(frag.Source)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func mustMarshalIndent(v interface{}) string {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(data)
 }
 
 func generateChapterSummary(ctx context.Context, apiCfg *APIConfig, cfg *Config, content string) (string, error) {
