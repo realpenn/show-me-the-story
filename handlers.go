@@ -37,6 +37,10 @@ type Handlers struct {
 	referencePath         string
 	referenceAnalysis     *ReferenceAnalysis
 	referenceAnalysisPath string
+	rewriteRequests       []RewriteRequest
+	rewriteRequestsPath   string
+	rewritePlan           *RewritePlan
+	rewritePlanPath       string
 
 	// Task management
 	taskMu      sync.Mutex
@@ -64,6 +68,8 @@ func NewHandlers(apiCfg *APIConfig, apiCfgPath string, logger *LogBroadcaster, p
 		referenceAnalysis: &ReferenceAnalysis{
 			SettingsImportStatus: ReferenceSettingsStatusNone,
 		},
+		rewriteRequests: []RewriteRequest{},
+		rewritePlan:     &RewritePlan{Status: RewritePlanStatusDraft},
 		postprocess: &PostProcessState{
 			ExecuteOptions: &PostProcessExecuteOptions{RunSmoothTransitionsFirst: true},
 		},
@@ -138,6 +144,18 @@ func (h *Handlers) switchProject(name string) error {
 		return fmt.Errorf("加载参考分析失败: %w", err)
 	}
 
+	rewriteRequestsPath := filepath.Join(projectDir, "rewrite_requests.json")
+	rewriteRequests, err := LoadRewriteRequests(rewriteRequestsPath)
+	if err != nil {
+		return fmt.Errorf("加载改写意见失败: %w", err)
+	}
+
+	rewritePlanPath := filepath.Join(projectDir, "rewrite_plan.json")
+	rewritePlan, err := LoadRewritePlan(rewritePlanPath)
+	if err != nil {
+		return fmt.Errorf("加载改编方案失败: %w", err)
+	}
+
 	h.projectName = name
 	h.cfg = cfg
 	h.cfgPath = configPath
@@ -153,6 +171,10 @@ func (h *Handlers) switchProject(name string) error {
 	h.reference = reference
 	h.referenceAnalysisPath = referenceAnalysisPath
 	h.referenceAnalysis = referenceAnalysis
+	h.rewriteRequestsPath = rewriteRequestsPath
+	h.rewriteRequests = rewriteRequests
+	h.rewritePlanPath = rewritePlanPath
+	h.rewritePlan = rewritePlan
 
 	fmt.Printf(" [系统] 已切换到项目: %s (%s)\n", name, projectDir)
 	return nil
@@ -1577,6 +1599,234 @@ func (h *Handlers) PostReferenceSettingsImport(w http.ResponseWriter, r *http.Re
 		"settings": h.settings,
 		"analysis": h.referenceAnalysis,
 	})
+}
+
+func (h *Handlers) GetRewrite(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	h.writeJSON(w, http.StatusOK, h.rewriteResponse())
+}
+
+func (h *Handlers) rewriteResponse() map[string]interface{} {
+	return map[string]interface{}{
+		"requests": h.rewriteRequests,
+		"plan":     h.rewritePlan,
+	}
+}
+
+func (h *Handlers) GetRewriteRequests(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	h.writeJSON(w, http.StatusOK, h.rewriteRequests)
+}
+
+func (h *Handlers) PostRewriteRequest(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	var req RewriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+	req = NormalizeRewriteRequest(req)
+	if err := ValidateRewriteRequest(req); err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	req.ID = NextRewriteRequestID(h.rewriteRequests)
+	req.CreatedAt = now
+	req.UpdatedAt = now
+	h.rewriteRequests = append(h.rewriteRequests, req)
+	h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+	if err := SaveRewriteRequests(h.rewriteRequestsPath, h.rewriteRequests); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存改写意见失败: "+err.Error())
+		return
+	}
+	if err := SaveRewritePlan(h.rewritePlanPath, h.rewritePlan); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())
+		return
+	}
+	h.writeJSON(w, http.StatusOK, req)
+}
+
+func (h *Handlers) PutRewriteRequest(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	id := r.PathValue("id")
+	var req RewriteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+	req.ID = id
+	req = NormalizeRewriteRequest(req)
+	if err := ValidateRewriteRequest(req); err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	for i := range h.rewriteRequests {
+		if h.rewriteRequests[i].ID == id {
+			req.CreatedAt = h.rewriteRequests[i].CreatedAt
+			req.UpdatedAt = time.Now().Format(time.RFC3339)
+			h.rewriteRequests[i] = req
+			h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+			if err := SaveRewriteRequests(h.rewriteRequestsPath, h.rewriteRequests); err != nil {
+				h.writeError(w, http.StatusInternalServerError, "保存改写意见失败: "+err.Error())
+				return
+			}
+			if err := SaveRewritePlan(h.rewritePlanPath, h.rewritePlan); err != nil {
+				h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())
+				return
+			}
+			h.writeJSON(w, http.StatusOK, req)
+			return
+		}
+	}
+	h.writeError(w, http.StatusNotFound, "改写意见不存在")
+}
+
+func (h *Handlers) DeleteRewriteRequest(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	id := r.PathValue("id")
+	for i := range h.rewriteRequests {
+		if h.rewriteRequests[i].ID == id {
+			h.rewriteRequests = append(h.rewriteRequests[:i], h.rewriteRequests[i+1:]...)
+			h.rewritePlan = markRewritePlanDraft(h.rewritePlan)
+			if err := SaveRewriteRequests(h.rewriteRequestsPath, h.rewriteRequests); err != nil {
+				h.writeError(w, http.StatusInternalServerError, "保存改写意见失败: "+err.Error())
+				return
+			}
+			if err := SaveRewritePlan(h.rewritePlanPath, h.rewritePlan); err != nil {
+				h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())
+				return
+			}
+			h.writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+			return
+		}
+	}
+	h.writeError(w, http.StatusNotFound, "改写意见不存在")
+}
+
+func markRewritePlanDraft(plan *RewritePlan) *RewritePlan {
+	if plan == nil {
+		return &RewritePlan{Status: RewritePlanStatusDraft}
+	}
+	if plan.Status == RewritePlanStatusConfirmed {
+		return plan
+	}
+	plan.Status = RewritePlanStatusDraft
+	return plan
+}
+
+func (h *Handlers) GetRewritePlan(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	h.writeJSON(w, http.StatusOK, h.rewritePlan)
+}
+
+func (h *Handlers) PostRewritePlanGenerate(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		return
+	}
+
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("rewrite_plan_generate")
+		ctx := h.taskCtx
+
+		plan, err := GenerateRewritePlanAction(ctx, h.apiCfg, h.cfg, h.reference, h.referenceAnalysis, h.rewriteRequests, h.logger)
+		if err != nil {
+			if ctx.Err() != nil {
+				h.logger.Warn("改编总方案生成已取消")
+			} else {
+				h.logger.Error(fmt.Sprintf("改编总方案生成失败: %v", err))
+			}
+			h.logger.TaskEnd("rewrite_plan_generate", false)
+			return
+		}
+		if err := SaveRewritePlan(h.rewritePlanPath, plan); err != nil {
+			h.logger.Error(fmt.Sprintf("保存改编总方案失败: %v", err))
+			h.logger.TaskEnd("rewrite_plan_generate", false)
+			return
+		}
+		h.rewritePlan = plan
+		h.logger.Success("改编总方案生成完成，请审核后确认")
+		h.logger.TaskEnd("rewrite_plan_generate", true)
+		h.logger.Emit("rewrite_update", h.rewriteResponse())
+	}()
+
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
+func (h *Handlers) PutRewritePlan(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	var plan RewritePlan
+	if err := json.NewDecoder(r.Body).Decode(&plan); err != nil {
+		h.writeError(w, http.StatusBadRequest, "无效的JSON: "+err.Error())
+		return
+	}
+	normalizeRewritePlan(&plan, h.reference)
+	if err := ValidateRewritePlanMappings(&plan, h.reference); err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if plan.Status == "" {
+		plan.Status = RewritePlanStatusGenerated
+	}
+	if plan.GeneratedAt == "" && h.rewritePlan != nil {
+		plan.GeneratedAt = h.rewritePlan.GeneratedAt
+	}
+	if err := SaveRewritePlan(h.rewritePlanPath, &plan); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "保存改编方案失败: "+err.Error())
+		return
+	}
+	h.rewritePlan = &plan
+	h.writeJSON(w, http.StatusOK, h.rewritePlan)
+}
+
+func (h *Handlers) PostRewritePlanConfirm(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureRewriteProject(w) {
+		return
+	}
+	if h.rejectIfTaskRunning(w) {
+		return
+	}
+	if h.rewritePlan == nil || len(h.rewritePlan.Chapters) == 0 {
+		h.writeError(w, http.StatusBadRequest, "请先生成改编总方案")
+		return
+	}
+	if err := ConfirmRewritePlan(h.rewritePlan, h.reference, h.cfg, h.state, h.progressPath, h.rewritePlanPath); err != nil {
+		h.writeError(w, http.StatusBadRequest, "确认改编总方案失败: "+err.Error())
+		return
+	}
+	h.broadcastProgress()
+	h.writeJSON(w, http.StatusOK, h.rewriteResponse())
 }
 
 func (h *Handlers) PostOutlineGenerateContinuation(w http.ResponseWriter, r *http.Request) {

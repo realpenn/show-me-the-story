@@ -382,6 +382,14 @@ var systemPrompts = map[string]map[string]string{
 		LangZH: "你是一位专业的授权改写参考书分析编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字或markdown代码块标记。",
 		LangEN: "You are a professional reference-novel analyst for authorised rewrites. Output strict JSON exactly as requested — no extra prose, no markdown code fences.",
 	},
+	"rewrite_planner": {
+		LangZH: "你是一位专业的授权小说改编策划编辑。请严格按要求提取改编规划要点，不要改写正文。",
+		LangEN: "You are a professional adaptation planner for authorised novel rewrites. Extract planning notes as requested; do not rewrite prose.",
+	},
+	"rewrite_planner_json": {
+		LangZH: "你是一位专业的授权小说改编策划编辑。请严格按照要求的JSON格式输出，不要添加任何额外文字或markdown代码块标记。",
+		LangEN: "You are a professional adaptation planner for authorised novel rewrites. Output strict JSON exactly as requested — no extra prose, no markdown code fences.",
+	},
 	"transition_editor": {
 		LangZH: "你是一位资深小说编辑，擅长打磨章节之间的衔接。请严格按要求输出。",
 		LangEN: "You are a senior novel editor specialising in chapter-to-chapter transitions. Follow the output instructions strictly.",

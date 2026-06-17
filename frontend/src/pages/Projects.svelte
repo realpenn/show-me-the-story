@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage, currentProjectType, referenceState } from '../lib/stores.js';
+  import { currentProject, projects, addToast, showConfirm, taskRunning, progress, config, settings, chatSessions, currentChatSession, projectLanguage, currentProjectType, referenceState, rewriteState } from '../lib/stores.js';
   import { t, setLocale } from '../lib/i18n/index.js';
 
   let newProjectName = '';
@@ -32,6 +32,7 @@
       currentProject.set(name);
       currentProjectType.set('original');
       referenceState.set(null);
+      rewriteState.set(null);
       // Reload all project data
       try { progress.set(await api('GET', '/api/progress')); } catch (e) {}
       try {
@@ -47,6 +48,7 @@
       try {
         if ((await getSelectedProjectType()) === 'rewrite') {
           referenceState.set(await api('GET', '/api/reference'));
+          rewriteState.set(await api('GET', '/api/rewrite'));
         }
       } catch (e) {}
       try { chatSessions.set(await api('GET', '/api/chat/sessions')); } catch (e) {}

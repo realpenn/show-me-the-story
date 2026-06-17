@@ -1,4 +1,4 @@
-import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, referenceState } from './stores.js';
+import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, referenceState, rewriteState } from './stores.js';
 import { api } from './api.js';
 import { getLocale, translate, translateServerMessage } from './i18n/index.js';
 
@@ -141,6 +141,10 @@ export function connectSSE() {
       }
     }
 
+    if (d.task === 'rewrite_plan_generate') {
+      api('GET', '/api/rewrite').then(r => rewriteState.set(r)).catch(() => {});
+    }
+
     if (d.task === 'chat_message') {
       let sessionId = null;
       currentChatSession.update(s => {
@@ -193,6 +197,11 @@ export function connectSSE() {
   eventSource.addEventListener('reference_update', e => {
     const d = JSON.parse(e.data);
     referenceState.set(d);
+  });
+
+  eventSource.addEventListener('rewrite_update', e => {
+    const d = JSON.parse(e.data);
+    rewriteState.set(d);
   });
 
   eventSource.addEventListener('settings_reconciled', e => {

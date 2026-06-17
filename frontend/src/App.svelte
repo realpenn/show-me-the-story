@@ -1,6 +1,6 @@
 <script>
   import { currentPage } from './lib/router.js';
-  import { progress, taskRunning, contextPage, toastStore, currentProject, projectLanguage, currentProjectType, referenceState } from './lib/stores.js';
+  import { progress, taskRunning, contextPage, toastStore, currentProject, projectLanguage, currentProjectType, referenceState, rewriteState } from './lib/stores.js';
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { onMount } from 'svelte';
@@ -13,6 +13,8 @@
   import Skills from './pages/Skills.svelte';
   import Foreshadows from './pages/Foreshadows.svelte';
   import Reference from './pages/Reference.svelte';
+  import RewriteRequests from './pages/RewriteRequests.svelte';
+  import RewritePlan from './pages/RewritePlan.svelte';
   import ChatPanel from './components/ChatPanel.svelte';
   import ConfirmModal from './components/ConfirmModal.svelte';
 
@@ -37,6 +39,7 @@
         try { const p = await api('GET', '/api/progress'); progress.set(p); } catch (e) {}
         if ((cur.project_type || 'original') === 'rewrite') {
           try { referenceState.set(await api('GET', '/api/reference')); } catch (e) {}
+          try { rewriteState.set(await api('GET', '/api/rewrite')); } catch (e) {}
         }
       }
     } catch (e) {}
@@ -47,7 +50,7 @@
         : $progress.phase === 'writing' ? $t('app.phase.writing')
         : $progress.phase)
     : $t('app.phase.unstarted');
-  $: if ($currentProject && $currentProjectType === 'rewrite' && !['config', 'reference', 'relations', 'skills'].includes($currentPage)) {
+  $: if ($currentProject && $currentProjectType === 'rewrite' && !['config', 'reference', 'rewrite-requests', 'rewrite-plan', 'relations', 'skills'].includes($currentPage)) {
     window.location.hash = '#reference';
   }
   $: chapterStats = (() => {
@@ -65,6 +68,7 @@
     currentProject.set(null);
     currentProjectType.set('original');
     referenceState.set(null);
+    rewriteState.set(null);
   }
 
   function toggleLocale() {
@@ -128,6 +132,8 @@
             ? [
                 ['config', '⚙️', 'nav.config'],
                 ['reference', '📚', 'nav.reference'],
+                ['rewrite-requests', '🧭', 'nav.rewriteRequests'],
+                ['rewrite-plan', '🧱', 'nav.rewritePlan'],
                 ['relations', '🕸️', 'nav.relations'],
                 ['skills', '🧩', 'nav.skills']
               ]
@@ -154,6 +160,10 @@
             <Config {sendToChat} />
           {:else if $currentPage === 'reference'}
             <Reference />
+          {:else if $currentPage === 'rewrite-requests'}
+            <RewriteRequests />
+          {:else if $currentPage === 'rewrite-plan'}
+            <RewritePlan />
           {:else if $currentPage === 'outline'}
             <Outline {sendToChat} />
           {:else if $currentPage === 'writing'}
