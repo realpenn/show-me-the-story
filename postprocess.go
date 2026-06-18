@@ -49,9 +49,18 @@ type PostProcessExecuteOptions struct {
 	IncludePolish             bool `json:"include_polish"`
 }
 
+type RewriteReportState struct {
+	RequestReport    string `json:"request_report,omitempty"`
+	StructureReport  string `json:"structure_report,omitempty"`
+	SimilarityReport string `json:"similarity_report,omitempty"`
+	SettingsReport   string `json:"settings_report,omitempty"`
+	GeneratedAt      string `json:"generated_at,omitempty"`
+}
+
 type PostProcessState struct {
 	DiagnosisReport   string                     `json:"diagnosis_report,omitempty"`
 	ConsistencyReport string                     `json:"consistency_report,omitempty"`
+	RewriteReports    *RewriteReportState        `json:"rewrite_reports,omitempty"`
 	Roadmap           []RoadmapItem              `json:"roadmap,omitempty"`
 	BundleMode        string                     `json:"bundle_mode,omitempty"`
 	VolumeCount       int                        `json:"volume_count,omitempty"`

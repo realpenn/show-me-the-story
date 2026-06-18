@@ -2605,6 +2605,58 @@ func (h *Handlers) PostPostProcessRoadmap(w http.ResponseWriter, r *http.Request
 	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
+// PostPostProcessRewriteReports 异步：生成改写专项报告。
+func (h *Handlers) PostPostProcessRewriteReports(w http.ResponseWriter, r *http.Request) {
+	if !h.ensureProject(w) {
+		return
+	}
+	if h.cfg == nil || NormalizeProjectType(h.cfg.ProjectType) != ProjectTypeRewrite {
+		h.writeError(w, http.StatusBadRequest, "当前项目不是改写项目")
+		return
+	}
+	if !isBookFullyAccepted(h.state) {
+		h.writeError(w, http.StatusBadRequest, "全书尚未完成（需所有章节已确认）")
+		return
+	}
+	if h.rewritePlan == nil || h.rewritePlan.Status != RewritePlanStatusConfirmed {
+		h.writeError(w, http.StatusBadRequest, "请先确认改编总方案")
+		return
+	}
+	if !h.tryStartTask() {
+		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
+		return
+	}
+
+	go func() {
+		defer h.endTask()
+		h.logger.TaskStart("postprocess_rewrite_reports")
+		ctx := h.taskCtx
+
+		reports, err := BuildRewriteReportsAction(ctx, h.cfg, h.settings, h.state, h.reference, h.referenceAnalysis, h.rewritePlan, h.rewriteRequests)
+		if err != nil {
+			if ctx.Err() != nil {
+				h.logger.Warn("改写专项报告生成已取消")
+			} else {
+				h.logger.Error(fmt.Sprintf("改写专项报告生成失败: %v", err))
+			}
+			h.logger.TaskEnd("postprocess_rewrite_reports", false)
+			return
+		}
+
+		h.postprocess.RewriteReports = reports
+		if err := SavePostProcess(h.postprocessPath, h.postprocess); err != nil {
+			h.logger.Error(fmt.Sprintf("保存改写专项报告失败: %v", err))
+			h.logger.TaskEnd("postprocess_rewrite_reports", false)
+			return
+		}
+
+		h.logger.PostProcessUpdate(h.postprocess)
+		h.logger.TaskEnd("postprocess_rewrite_reports", true)
+	}()
+
+	h.writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
+}
+
 // PostPostProcessExecute 异步：执行已勾选的优化工单。
 func (h *Handlers) PostPostProcessExecute(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureProject(w) {

@@ -11,7 +11,7 @@
 - **默认端口**：`:48090`（可通过 `PORT` 环境变量覆盖）
 - **前端**：Vite 5 + Svelte 4 + Tailwind CSS 4 + DaisyUI 5（xianii 暗色主题）
 - **项目目录**：`storys/`（程序同目录下，每个故事项目一个子目录）
-- **项目类型**：`Config.ProjectType` 为 `original` / `rewrite`，旧项目缺省 `original`；改写项目当前支持 TXT 参考小说导入、章节边界审核、分批参考分析、设定候选导入、改写意见管理、改编总方案生成与确认门、逐章完全重写、三项检查与重点章节全文参考
+- **项目类型**：`Config.ProjectType` 为 `original` / `rewrite`，旧项目缺省 `original`；改写项目当前支持 TXT 参考小说导入、章节边界审核、分批参考分析、设定候选导入、改写意见管理、改编总方案生成与确认门、逐章完全重写、三项检查、重点章节全文参考、改写专项报告与 TXT/Markdown 导出
 - **多语言**：每个项目在创建时选择 `zh` / `en`，决定 AI 提示词、生成正文、内置技能与 Agent 系统提示；前端 UI 语言独立可切换
 - **许可证**：MIT（见根目录 `LICENSE`）
 - **文档**：根目录 [`README.md`](README.md)（中文）+ [`README.en.md`](README.en.md)（英文，首行链接互通）
@@ -65,6 +65,7 @@ task dev                              # 编译并启动 Go 后端
                   ├─ state.go       ← 进度/章节/伏笔结构体 + 持久化
                   ├─ prompts.go     ← 提示词模板渲染 + 内置默认模板
                   ├─ postprocess.go ← 全书优化（诊断/核查/路线图/按章执行）+ postprocess.json 持久化
+                  ├─ rewrite_reports.go ← 改写专项报告（意见落实/结构保真/相似度风险/设定变化）
                   └─ filesys.go     ← 文件操作抽象
 ```
 
@@ -89,9 +90,10 @@ task dev                              # 编译并启动 Go 后端
 | `skills.go` | `Skill`、`SkillConfig` 结构体，`LoadBuiltinSkills`、`LoadProjectSkills`、`MergeSkills`、`GetEnabledSkills`、`GetEnabledSkillsByCategory`、`FormatSkillsContent`，`//go:embed embeds/skills` |
 | `agent.go` | `Tool`、`AgentContext`、`AgentStep`、`ToolCall` 结构体，`RunAgentLoop`（多轮消息历史 + 双语 tool 结果标签）、工具调用解析、内置工具集（读/写角色/世界观/章节等）、`buildAgentSystemPromptZH`/`buildAgentSystemPromptEN` 按项目语言选择系统提示、`requireConfirm`（破坏性工具需 `confirm: true`） |
 | `chat.go` | `ChatSession`、`ChatMessage`、`ChatSessionIndex` 结构体，`LoadChatSessions`、`LoadChatSession`、`SaveChatSession`、`DeleteChatSession` |
-| `postprocess.go` | `PostProcessState`/`RoadmapItem` 结构体，`LoadPostProcess`/`SavePostProcess`（`postprocess.json`）、`buildPostProcessBundle`（设定+摘要+全文组装与长文策略：全文/摘要模式）、`DiagnoseBookAction`、`ConsistencyCheckBookAction`（超长书按卷分段）、`BuildRoadmapAction`、`FullPostProcessAnalyzeAction`（诊断→核查→路线图）、`ExecuteRoadmapAction`（可选前置衔接优化 + 逐条定向修订/润色 + diff 节选） |
-| `handlers.go` | `Handlers` 结构体（含项目管理字段 `progDir`/`projectName`/`projectMu`、自动确认开关 `autoConfirm`、`postprocess`/`postprocessPath`、`reference`/`referencePath`、`referenceAnalysis`/`referenceAnalysisPath`、`rewriteRequests`/`rewriteRequestsPath`、`rewritePlan`/`rewritePlanPath`）、`projectDir()` 帮助函数、项目切换 `switchProject()`、`ensureProject()`/`ensureRewriteProject()` 检查、`rejectIfTaskRunning()`（任务运行期间编辑类端点返回 409）、所有 HTTP handler（含参考书 `GetReference`/`PostReferenceImport`/`PutReferenceChapters`/`PostReferenceAnalyze`/`PostReferenceSettingsImport`，改写 `GetRewrite`/`GetRewriteRequests`/`PostRewriteRequest`/`PutRewriteRequest`/`DeleteRewriteRequest`/`GetRewritePlan`/`PostRewritePlanGenerate`/`PutRewritePlan`/`PostRewritePlanConfirm`、`PostChapterPolish` 单章去AI味、`PostChapterReviseSpecific` 定向修订、`PostChaptersSmoothTransitions` 批量衔接优化、全书优化 `GetPostProcess`/`PostPostProcessDiagnose`/`PostPostProcessConsistency`/`PostPostProcessRoadmap`/`PutPostProcessRoadmap`/`PostPostProcessExecute`/`DeletePostProcess`、`GetAutoConfirm`/`PutAutoConfirm`）、`PostChapterGenerate` 自动确认循环（原创项目调用 `GenerateChapterAction`，改写项目调用 `RewriteChapterAction`，任务名 `rewrite_chapter_generation`）、`PostChapterRevise`/`PostChapterReviseSpecific` 改写项目修订后自动 `RecheckRewriteChapterAction`、`tryStartTask`/`endTask`/`startChildWork` 互斥、项目管理 handler（`GetProjects`/`PostProject`/`PostProjectSelect`/`GetProjectCurrent`/`DeleteProject`） |
-| `web.go` | 路由注册（含项目管理端点、参考书端点、改写意见/方案端点、`/api/autoconfirm`）、CORS/日志中间件、静态文件服务、`startWebServer`、项目管理 handler（`GetProjects`/`PostProject`/`GetProjectCurrent`/`PostProjectSelect`/`DeleteProject`，创建/列表/当前项目均带 `project_type`） |
+| `postprocess.go` | `PostProcessState`/`RoadmapItem`/`RewriteReportState` 结构体，`LoadPostProcess`/`SavePostProcess`（`postprocess.json`）、`buildPostProcessBundle`（设定+摘要+全文组装与长文策略：全文/摘要模式）、`DiagnoseBookAction`、`ConsistencyCheckBookAction`（超长书按卷分段）、`BuildRoadmapAction`、`FullPostProcessAnalyzeAction`（诊断→核查→路线图）、`ExecuteRoadmapAction`（可选前置衔接优化 + 逐条定向修订/润色 + diff 节选） |
+| `rewrite_reports.go` | `BuildRewriteReportsAction` 与四类改写专项 Markdown 报告：改写意见落实、原文结构保真、相似度风险（聚合高风险章节 + 全文参考章节）、角色/设定变化一致性；从 `rewrite_plan.json` 的检查结果和方案数据确定性汇总，不改写正文 |
+| `handlers.go` | `Handlers` 结构体（含项目管理字段 `progDir`/`projectName`/`projectMu`、自动确认开关 `autoConfirm`、`postprocess`/`postprocessPath`、`reference`/`referencePath`、`referenceAnalysis`/`referenceAnalysisPath`、`rewriteRequests`/`rewriteRequestsPath`、`rewritePlan`/`rewritePlanPath`）、`projectDir()` 帮助函数、项目切换 `switchProject()`、`ensureProject()`/`ensureRewriteProject()` 检查、`rejectIfTaskRunning()`（任务运行期间编辑类端点返回 409）、所有 HTTP handler（含参考书 `GetReference`/`PostReferenceImport`/`PutReferenceChapters`/`PostReferenceAnalyze`/`PostReferenceSettingsImport`，改写 `GetRewrite`/`GetRewriteRequests`/`PostRewriteRequest`/`PutRewriteRequest`/`DeleteRewriteRequest`/`GetRewritePlan`/`PostRewritePlanGenerate`/`PutRewritePlan`/`PostRewritePlanConfirm`、`PostChapterPolish` 单章去AI味、`PostChapterReviseSpecific` 定向修订、`PostChaptersSmoothTransitions` 批量衔接优化、全书优化 `GetPostProcess`/`PostPostProcessDiagnose`/`PostPostProcessConsistency`/`PostPostProcessRoadmap`/`PostPostProcessRewriteReports`/`PutPostProcessRoadmap`/`PostPostProcessExecute`/`DeletePostProcess`、`GetAutoConfirm`/`PutAutoConfirm`）、`PostChapterGenerate` 自动确认循环（原创项目调用 `GenerateChapterAction`，改写项目调用 `RewriteChapterAction`，任务名 `rewrite_chapter_generation`）、`PostChapterRevise`/`PostChapterReviseSpecific` 改写项目修订后自动 `RecheckRewriteChapterAction`、`tryStartTask`/`endTask`/`startChildWork` 互斥、项目管理 handler（`GetProjects`/`PostProject`/`PostProjectSelect`/`GetProjectCurrent`/`DeleteProject`） |
+| `web.go` | 路由注册（含项目管理端点、参考书端点、改写意见/方案端点、全书优化/改写专项报告端点、`/api/autoconfirm`）、CORS/日志中间件、静态文件服务、`startWebServer`、项目管理 handler（`GetProjects`/`PostProject`/`GetProjectCurrent`/`PostProjectSelect`/`DeleteProject`，创建/列表/当前项目均带 `project_type`） |
 | `logger.go` | `LogBroadcaster`（SSE 广播）、所有日志/事件方法（含 `ChatChunk`、`ToolCallStart`、`ToolCallEnd`、`StreamStart`、`StreamProgress`、`PolishResult`、`PostProcessReport`、`PostProcessRoadmap`、`PostProcessItemDone`、`PostProcessUpdate`）、`LogEntry.MsgEN` 可选英文版、`logBilingual` 与 `InfoBilingual`/`ErrorBilingual`/`WarnBilingual`/`SuccessBilingual` |
 | `prompts.go` | `RenderPrompt`（`{{.KeyName}}` 替换）、`DefaultPromptsZH` 变量（所有内置中文提示词模板，含参考分析、改编方案、改写章节生成与三项检查模板）、`DefaultPromptsForLang(lang)` |
 | `prompts_en.go` | `DefaultPromptsEN`：英文模板全集（与中文一一对应，含参考分析、改编方案、改写章节生成与三项检查模板） |
@@ -116,7 +118,7 @@ task dev                              # 编译并启动 Go 后端
 | `src/lib/api.js` | `api(method, url, body)` — fetch 封装，自动带 `X-UI-Locale`/`Accept-Language` 头，错误消息走 `translateServerMessage` |
 | `src/lib/router.js` | `currentPage` store + hash 路由监听 |
 | `src/lib/stores.js` | 全局 Svelte stores（progress、config、settings、postprocess、referenceState、rewriteState、taskRunning、streamCharCount、autoConfirm、lastFailedTask、`projectLanguage`、`currentProjectType` 等）+ toast/log 管理 |
-| `src/lib/sse.js` | `connectSSE()` — EventSource 连接 URL 拼 `?locale=` + 多种事件处理 → 更新 stores；content_chunk/chat_chunk 按 150ms 节流缓冲批量刷入；章节流式全文只存模块级变量，`streamingContent` store 仅保留尾部窗口（约 3000 字符）；`refreshProgress()` 对 progress_update 拉取做 500ms 去抖（task_end 立即刷新）；stream_start 事件清空流式缓冲；`log` 事件优先用 `msg_en` 字段，否则 `translateServerMessage`；任务名通过 i18n `task.<name>` 翻译；参考书任务 `reference_import`/`reference_analyze` 完成后刷新 `referenceState`，改编方案/改写章节/章节修订任务 `rewrite_plan_generate`/`rewrite_chapter_generation`/`chapter_revision` 完成后刷新 `rewriteState`，`reference_update`/`rewrite_update` 事件直接更新；全书优化 `postprocess_update`/`postprocess_roadmap`/`postprocess_item_done` 事件 |
+| `src/lib/sse.js` | `connectSSE()` — EventSource 连接 URL 拼 `?locale=` + 多种事件处理 → 更新 stores；content_chunk/chat_chunk 按 150ms 节流缓冲批量刷入；章节流式全文只存模块级变量，`streamingContent` store 仅保留尾部窗口（约 3000 字符）；`refreshProgress()` 对 progress_update 拉取做 500ms 去抖（task_end 立即刷新）；stream_start 事件清空流式缓冲；`log` 事件优先用 `msg_en` 字段，否则 `translateServerMessage`；任务名通过 i18n `task.<name>` 翻译；参考书任务 `reference_import`/`reference_analyze` 完成后刷新 `referenceState`，改编方案/改写章节/章节修订任务 `rewrite_plan_generate`/`rewrite_chapter_generation`/`chapter_revision` 完成后刷新 `rewriteState`，`reference_update`/`rewrite_update` 事件直接更新；全书优化/改写报告任务完成后刷新 `postprocess`，并处理 `postprocess_update`/`postprocess_roadmap`/`postprocess_item_done` 事件 |
 | `src/lib/markdown.js` | `renderMarkdown(text)` — marked 解析 + DOMPurify 清洗，供聊天气泡渲染 markdown |
 | `src/lib/i18n/index.js` | i18n 核心：`uiLocale` store（持久化到 `localStorage`）、`setLocale`/`getLocale`、`t` 派生 store（`$t('key', params)`，插值 `{name}`）、`translate` 命令式、`translateServerMessage(msg, lang)` 把后端中文映射到英文（含 errorCatalog 镜像 + 常见 log + 动态前缀） |
 | `src/lib/i18n/zh.js`, `en.js` | 扁平 key 字典；新增可见文案必须同时在两个文件加 key |
@@ -126,9 +128,9 @@ task dev                              # 编译并启动 Go 后端
 | `src/pages/RewritePlan.svelte` | 改编方案页：`POST /api/rewrite/plan/generate` 异步生成方案；展示全书方向、意见影响地图、章节多对多映射、新稿章节计划；支持 JSON 编辑 `PUT /api/rewrite/plan`；每章可切换 `use_original_full_text` 并填写/保存 `full_text_reason`（开启后后端强制理由并使用严格贴近度阈值）；`POST /api/rewrite/plan/confirm` 通过映射校验后生成 `state.Chapters` pending 新稿骨架 |
 | `src/pages/Config.svelte` | 配置页：API 配置（含上下文预算 tokens）、故事配置（直接 PUT 保存 + 关键设定变更时提示协调）、角色管理、世界观管理、组织管理（卡片 + 成员勾选）、关系管理（卡片 + 源/目标实体选择）；任务运行时所有输入控件禁用 |
 | `src/pages/Outline.svelte` | 大纲页：直接操作按钮（生成/确认/修订意见/删除/生成后续大纲）+ 导入续写 + pending 章节内联编辑 + 流式预览 |
-| `src/pages/Writing.svelte` | 写作页：章节列表（状态点）+ 直接操作（生成/确认/修改意见/去AI味，自动区分当前章修订与定向修订）+ 自动确认模式开关（toggle，随时可开关）+ 伏笔追踪摘要卡片（活跃/超期/临近回收）+ 改写项目三项检查面板（意见符合度/结构保真/贴近风险、确定性相似度指标、高风险片段、需复核原因）+ 优化章节衔接（进度卡片工具栏小按钮，已确认 ≥ 2 章时显示）+ 导出 TXT + 复制 + 上下章导航 + 流式尾部窗口展示（含「仅显示最新内容」提示，字数用 streamCharCount）+ rAF 自动滚动（自动确认模式下自动跟随正在生成的章节）+ 全书完成后展示 `PostProcessPanel` |
+| `src/pages/Writing.svelte` | 写作页：章节列表（状态点）+ 直接操作（生成/确认/修改意见/去AI味，自动区分当前章修订与定向修订）+ 自动确认模式开关（toggle，随时可开关）+ 伏笔追踪摘要卡片（活跃/超期/临近回收）+ 改写项目三项检查面板（意见符合度/结构保真/贴近风险、确定性相似度指标、高风险片段、需复核原因）+ 优化章节衔接（进度卡片工具栏小按钮，已确认 ≥ 2 章时显示）+ 导出 TXT/Markdown + 复制 + 上下章导航 + 流式尾部窗口展示（含「仅显示最新内容」提示，字数用 streamCharCount）+ rAF 自动滚动（自动确认模式下自动跟随正在生成的章节）+ 全书完成后展示 `PostProcessPanel` |
 | `src/pages/Foreshadows.svelte` | 伏笔页：统计概览 + AI 设计伏笔 + 手动 CRUD + AI 建议确认面板（SSE `foreshadow_suggestions`）+ 列表/章节时间线/路线图文档三视图 + 复制/下载 `Foreshadows.md` |
-| `src/components/PostProcessPanel.svelte` | 全书优化面板：开始全书分析（诊断+核查+路线图）/ 重新核查 / 重新生成路线图 / 清空；诊断与核查报告 Markdown 展示；优化工单表格（勾选、编辑意见、执行选项、diff 对比弹窗） |
+| `src/components/PostProcessPanel.svelte` | 全书优化面板：开始全书分析（诊断+核查+路线图）/ 重新核查 / 重新生成路线图 / 生成改写专项报告 / 清空；诊断、核查、改写意见落实、结构保真、相似度风险、设定变化报告 Markdown 展示；优化工单表格（勾选、编辑意见、执行选项、diff 对比弹窗） |
 | `src/pages/Relations.svelte` | 图谱页：Canvas 力导向图谱（ForceGraph 类），支持拖拽、滚轮缩放（以光标为中心，0.3x–3x）、hover 高亮（强调 hover 节点与其连线，次强调直接相邻节点，其余淡化） |
 | `src/pages/Assistant.svelte` | 助理页：聊天会话列表 + 消息区 + 工具调用卡片 + 流式回复 |
 | `src/pages/Skills.svelte` | 技能页：技能表格 + toggle 开关 |
@@ -144,7 +146,7 @@ task dev                              # 编译并启动 Go 后端
 
 启动时不绑定具体项目，前端显示项目选择页面。用户选择/创建项目后，后端通过 `switchProject()` 加载对应项目的全部数据。
 
-### 改写项目（阶段 1-4）
+### 改写项目（阶段 1-5）
 
 `Config.ProjectType` 控制项目类型：`original` 使用原有大纲/写作/伏笔流程；`rewrite` 当前显示配置、原文/参考、改写意见、改编方案、写作、伏笔、图谱、技能导航。旧项目缺字段时 `NormalizeProjectType` 归一为 `original`。
 
@@ -176,6 +178,8 @@ API：
 - 改写章节生成后执行三项检查：`RewriteComplianceCheck`（意见符合度）、`StructureFidelityCheck`（结构保真）、`ClosenessCheck`（贴近原文风险）；贴近风险同时运行 `AssessSimilarity` 确定性算法（字符 n-gram、句子重合、最长连续片段、高风险片段）。任一检查 FAIL 会带问题反馈自动重写，最多 3 次；最终结果写入 `rewrite_plan.json` 的 `CheckResults` 与章节 `last_check_result`
 - `POST /api/chapter/revise` / `POST /api/chapter/revise/{num}`：改写项目修订后自动 `RecheckRewriteChapterAction`，刷新三项检查结果；复核失败时保留修订正文并标记章节 `needs_review` / `needs_rewrite`
 - 方案确认后新增/修改/删除改写意见不会把方案整体退回 draft：`ApplyConfirmedRewriteRequestChange` 计算受影响章节，已写章节标记需复核/重写，未写 pending 章节计划追加新约束并同步 `state.Chapters[].Outline`
+- `POST /api/postprocess/rewrite-reports`：异步任务 `postprocess_rewrite_reports`，完稿后生成四份改写专项报告并保存到 `postprocess.json.rewrite_reports`：改写意见落实、原文结构保真、相似度风险、角色/设定变化一致性；相似度风险报告会列出高/中风险章节和所有 `UseOriginalFullText` 章节
+- 写作页支持整书 TXT 与 Markdown 下载；章节确认/修订仍会逐章落盘 `Chapter_XX.md`
 
 设定候选导入规则：空 `settings.json` 项目在参考分析完成后自动导入；已有设定时 `reference_analysis.json.settings_import_status = "preview_required"`，只展示候选，不静默覆盖，用户确认后才 append 新设定并尝试按名称解析关系端点。
 
@@ -352,12 +356,14 @@ pending → writing → review → accepted
     可选前置 SmoothTransitionsAction
     逐条 ExecuteRoadmapAction：同章多条工单合并为一次 ReviseSpecificChapterAction / PolishChapterAction
     每条完成后保存 diff 节选（前 500 字）+ 更新工单状态
+ → 改写项目可额外 POST /api/postprocess/rewrite-reports（异步）
+    BuildRewriteReportsAction：汇总改写意见落实 / 结构保真 / 相似度风险 / 设定变化报告
  → 可随时 POST /api/task/stop 取消（已完成项不丢失）
 ```
 
 - 上下文预算：`api.json` 的 `context_budget_tokens`（默认 900000），配置页可编辑
-- 数据持久化：项目目录 `postprocess.json`（报告、工单、执行状态）
-- 单独重跑：`POST /api/postprocess/consistency`（仅核查）、`POST /api/postprocess/roadmap`（仅路线图）
+- 数据持久化：项目目录 `postprocess.json`（诊断/核查报告、改写专项报告、工单、执行状态）
+- 单独重跑：`POST /api/postprocess/consistency`（仅核查）、`POST /api/postprocess/roadmap`（仅路线图）、`POST /api/postprocess/rewrite-reports`（改写项目专项报告）
 
 ## 续写功能流程
 
@@ -554,7 +560,7 @@ Skill 文件格式：YAML frontmatter（`---` 分隔，含 `lang: zh|en`，无 `
 
 前端使用 Vite 5 + Svelte 4 + Tailwind CSS 4 + DaisyUI 5 构建，产物输出到 `frontend/dist/`，通过 `//go:embed frontend/dist` 内嵌到 Go 二进制。主题使用 xianii 暗色主题（定义在 `src/app.css` 的 `@plugin "daisyui/theme"` 块中）。
 
-- **页面**：`config`（配置直接保存 + 角色管理 + 世界观管理 + 组织管理（卡片 + 角色成员勾选）+ 关系管理（卡片 + 源/目标实体下拉，实体覆盖角色/组织/世界观，值编码为 `type:id`））、`outline`（大纲直接操作 + 内联编辑 + 导入续写）、`writing`（写作直接操作 + 定向修订 + 自动确认模式开关 + 伏笔追踪摘要 + 导出 TXT）、`foreshadows`（伏笔 CRUD + AI 建议确认 + 列表/时间线/路线图三视图）、`relations`（关系图谱 Canvas）、`skills`（技能管理）
+- **页面**：`config`（配置直接保存 + 角色管理 + 世界观管理 + 组织管理（卡片 + 角色成员勾选）+ 关系管理（卡片 + 源/目标实体下拉，实体覆盖角色/组织/世界观，值编码为 `type:id`））、`outline`（大纲直接操作 + 内联编辑 + 导入续写）、`writing`（写作直接操作 + 定向修订 + 自动确认模式开关 + 伏笔追踪摘要 + 导出 TXT/Markdown）、`foreshadows`（伏笔 CRUD + AI 建议确认 + 列表/时间线/路线图三视图）、`relations`（关系图谱 Canvas）、`skills`（技能管理）
 - **状态管理**：Svelte stores（`src/lib/stores.js`），包含 progress、config、settings、taskRunning、streamCharCount（流式已生成字数）、autoConfirm（自动确认模式）、foreshadowSuggestions/foreshadowShowSuggestions（AI 伏笔建议待确认）等全局状态
 - **路由**：hash 路由（`src/lib/router.js`），`currentPage` store + `window.hashchange` 监听
 - **API 调用**：`api(method, url, body)` 封装 fetch（`src/lib/api.js`）

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { postprocess, taskRunning, addToast, confirmModal, progress } from '../lib/stores.js';
+  import { postprocess, taskRunning, addToast, confirmModal, progress, currentProjectType } from '../lib/stores.js';
   import { renderMarkdown } from '../lib/markdown.js';
   import { t } from '../lib/i18n/index.js';
 
@@ -11,6 +11,9 @@
   })();
 
   $: pp = $postprocess?.state;
+  $: isRewriteProject = $currentProjectType === 'rewrite';
+  $: rewriteReports = pp?.rewrite_reports;
+  $: hasRewriteReports = !!(rewriteReports?.request_report || rewriteReports?.structure_report || rewriteReports?.similarity_report || rewriteReports?.settings_report);
   $: opts = pp?.execute_options || { run_smooth_transitions_first: true, include_polish: false };
 
   let reportTab = 'diagnosis';
@@ -108,6 +111,13 @@
     } catch (e) { addToast(e.message, 'error'); }
   }
 
+  async function runRewriteReports() {
+    try {
+      await api('POST', '/api/postprocess/rewrite-reports');
+      addToast($t('pp.toast.rewriteReportsStarted'), 'info');
+    } catch (e) { addToast(e.message, 'error'); }
+  }
+
   function runExecute() {
     const pending = roadmapLocal.filter(r => r.selected && r.status === 'pending');
     const chapterCount = new Set(pending.map(r => r.chapter_num)).size;
@@ -145,6 +155,13 @@
 
   $: diagnosisHtml = pp?.diagnosis_report ? renderMarkdown(pp.diagnosis_report) : '';
   $: consistencyHtml = pp?.consistency_report ? renderMarkdown(pp.consistency_report) : '';
+  $: rewriteRequestHtml = rewriteReports?.request_report ? renderMarkdown(rewriteReports.request_report) : '';
+  $: rewriteStructureHtml = rewriteReports?.structure_report ? renderMarkdown(rewriteReports.structure_report) : '';
+  $: rewriteSimilarityHtml = rewriteReports?.similarity_report ? renderMarkdown(rewriteReports.similarity_report) : '';
+  $: rewriteSettingsHtml = rewriteReports?.settings_report ? renderMarkdown(rewriteReports.settings_report) : '';
+  $: if (hasRewriteReports && reportTab === 'diagnosis' && !diagnosisHtml && !consistencyHtml) {
+    reportTab = 'rewriteRequests';
+  }
   $: pendingCount = roadmapLocal.filter(r => r.status === 'pending').length;
   $: selectedPending = roadmapLocal.filter(r => r.selected && r.status === 'pending').length;
   $: selectedChapterCount = new Set(
@@ -176,19 +193,36 @@
         <button class="btn btn-primary btn-sm" on:click={runDiagnose} disabled={$taskRunning}>{$t('pp.btn.diagnose')}</button>
         <button class="btn btn-ghost btn-sm" on:click={runConsistency} disabled={$taskRunning || !pp?.diagnosis_report}>{$t('pp.btn.consistency')}</button>
         <button class="btn btn-ghost btn-sm" on:click={runRoadmap} disabled={$taskRunning || (!pp?.diagnosis_report && !pp?.consistency_report)}>{$t('pp.btn.roadmap')}</button>
+        {#if isRewriteProject}
+          <button class="btn btn-ghost btn-sm" on:click={runRewriteReports} disabled={$taskRunning}>{$t('pp.btn.rewriteReports')}</button>
+        {/if}
         <button class="btn btn-ghost btn-sm btn-error" on:click={clearAll} disabled={$taskRunning}>{$t('pp.btn.clear')}</button>
       </div>
 
-      {#if pp?.diagnosis_report || pp?.consistency_report}
-        <div class="tabs tabs-boxed tabs-sm w-fit">
+      {#if pp?.diagnosis_report || pp?.consistency_report || hasRewriteReports}
+        <div class="tabs tabs-boxed tabs-sm w-fit flex-wrap">
           <button class="tab {reportTab === 'diagnosis' ? 'tab-active' : ''}" on:click={() => reportTab = 'diagnosis'}>{$t('pp.tab.diagnosis')}</button>
           <button class="tab {reportTab === 'consistency' ? 'tab-active' : ''}" on:click={() => reportTab = 'consistency'}>{$t('pp.tab.consistency')}</button>
+          {#if hasRewriteReports}
+            <button class="tab {reportTab === 'rewriteRequests' ? 'tab-active' : ''}" on:click={() => reportTab = 'rewriteRequests'}>{$t('pp.tab.rewriteRequests')}</button>
+            <button class="tab {reportTab === 'rewriteStructure' ? 'tab-active' : ''}" on:click={() => reportTab = 'rewriteStructure'}>{$t('pp.tab.rewriteStructure')}</button>
+            <button class="tab {reportTab === 'rewriteSimilarity' ? 'tab-active' : ''}" on:click={() => reportTab = 'rewriteSimilarity'}>{$t('pp.tab.rewriteSimilarity')}</button>
+            <button class="tab {reportTab === 'rewriteSettings' ? 'tab-active' : ''}" on:click={() => reportTab = 'rewriteSettings'}>{$t('pp.tab.rewriteSettings')}</button>
+          {/if}
         </div>
         <div class="bg-base-300 rounded-lg p-3 max-h-64 overflow-y-auto text-sm">
           {#if reportTab === 'diagnosis' && diagnosisHtml}
             <div class="md-body">{@html diagnosisHtml}</div>
           {:else if reportTab === 'consistency' && consistencyHtml}
             <div class="md-body">{@html consistencyHtml}</div>
+          {:else if reportTab === 'rewriteRequests' && rewriteRequestHtml}
+            <div class="md-body">{@html rewriteRequestHtml}</div>
+          {:else if reportTab === 'rewriteStructure' && rewriteStructureHtml}
+            <div class="md-body">{@html rewriteStructureHtml}</div>
+          {:else if reportTab === 'rewriteSimilarity' && rewriteSimilarityHtml}
+            <div class="md-body">{@html rewriteSimilarityHtml}</div>
+          {:else if reportTab === 'rewriteSettings' && rewriteSettingsHtml}
+            <div class="md-body">{@html rewriteSettingsHtml}</div>
           {:else}
             <p class="text-base-content/40 text-center py-4">{$t('pp.report.empty')}</p>
           {/if}

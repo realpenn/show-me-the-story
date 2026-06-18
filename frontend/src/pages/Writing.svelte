@@ -158,19 +158,29 @@
     } catch (e) { addToast($t('common.copy.failed'), 'error'); }
   }
 
-  function exportBook() {
+  function exportBook(format = 'txt') {
     const written = chapters.filter(c => c.content);
     if (written.length === 0) { addToast($t('writing.toasts.exportEmpty'), 'error'); return; }
     const titleStr = p.title || $t('common.untitled');
-    const parts = [$t('writing.export.bookTitle', { title: titleStr }) + '\n'];
-    for (const c of written) {
-      parts.push('\n\n' + $t('writing.export.chapterHeader', { num: c.num, title: c.title }) + '\n\n' + c.content);
+    let content;
+    if (format === 'md') {
+      const parts = [`# ${titleStr}\n`];
+      for (const c of written) {
+        parts.push(`\n\n## ${$t('writing.export.chapterHeader', { num: c.num, title: c.title })}\n\n${c.content}`);
+      }
+      content = parts.join('');
+    } else {
+      const parts = [$t('writing.export.bookTitle', { title: titleStr }) + '\n'];
+      for (const c of written) {
+        parts.push('\n\n' + $t('writing.export.chapterHeader', { num: c.num, title: c.title }) + '\n\n' + c.content);
+      }
+      content = parts.join('');
     }
-    const blob = new Blob([parts.join('')], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([content], { type: format === 'md' ? 'text/markdown;charset=utf-8' : 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${p.title || $t('writing.export.defaultName')}.txt`;
+    a.download = `${p.title || $t('writing.export.defaultName')}.${format}`;
     a.click();
     URL.revokeObjectURL(url);
     addToast($t('writing.toasts.exportDone', { n: written.length }), 'success');
@@ -226,7 +236,8 @@
           {#if accepted >= 2}
             <button class="btn btn-ghost btn-xs" on:click={smoothTransitions} disabled={$taskRunning} title={$t('writing.btn.smoothTransitions.tip')}>{$t('writing.btn.smoothTransitions')}</button>
           {/if}
-          <button class="btn btn-ghost btn-xs" on:click={exportBook}>{$t('writing.btn.exportTxt')}</button>
+          <button class="btn btn-ghost btn-xs" on:click={() => exportBook('txt')}>{$t('writing.btn.exportTxt')}</button>
+          <button class="btn btn-ghost btn-xs" on:click={() => exportBook('md')}>{$t('writing.btn.exportMd')}</button>
         </div>
         <progress class="progress progress-primary w-full" value={pct} max="100"></progress>
         <div class="text-sm text-base-content/50">{$t('writing.progress.acceptedSummary', { pct, accepted, total })}</div>

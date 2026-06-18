@@ -79,6 +79,7 @@ func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Pr
 	mux.HandleFunc("POST /api/postprocess/diagnose", h.PostPostProcessDiagnose)
 	mux.HandleFunc("POST /api/postprocess/consistency", h.PostPostProcessConsistency)
 	mux.HandleFunc("POST /api/postprocess/roadmap", h.PostPostProcessRoadmap)
+	mux.HandleFunc("POST /api/postprocess/rewrite-reports", h.PostPostProcessRewriteReports)
 	mux.HandleFunc("POST /api/postprocess/execute", h.PostPostProcessExecute)
 	mux.HandleFunc("DELETE /api/chapter", h.DeleteChapter)
 	mux.HandleFunc("DELETE /api/chapters/from/{num}", h.DeleteChaptersFrom)

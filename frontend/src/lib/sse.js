@@ -130,7 +130,7 @@ export function connectSSE() {
       lastFailedTask.set({ task: d.task, taskName: taskLabel(d.task) });
     }
 
-    if (d.task === 'postprocess_diagnose' || d.task === 'postprocess_consistency' || d.task === 'postprocess_roadmap' || d.task === 'postprocess_execute') {
+    if (d.task === 'postprocess_diagnose' || d.task === 'postprocess_consistency' || d.task === 'postprocess_roadmap' || d.task === 'postprocess_execute' || d.task === 'postprocess_rewrite_reports') {
       api('GET', '/api/postprocess').then(p => postprocess.set(p)).catch(() => {});
     }
 
