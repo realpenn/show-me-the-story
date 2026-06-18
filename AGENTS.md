@@ -11,7 +11,7 @@
 - **默认端口**：`:48090`（可通过 `PORT` 环境变量覆盖）
 - **前端**：Vite 5 + Svelte 4 + Tailwind CSS 4 + DaisyUI 5（xianii 暗色主题）
 - **项目目录**：`storys/`（程序同目录下，每个故事项目一个子目录）
-- **项目类型**：`Config.ProjectType` 为 `original` / `rewrite`，旧项目缺省 `original`；改写项目当前支持 TXT 参考小说导入、章节边界审核、分批参考分析、设定候选导入、改写意见管理、改编总方案生成与确认门、逐章完全重写与三项检查
+- **项目类型**：`Config.ProjectType` 为 `original` / `rewrite`，旧项目缺省 `original`；改写项目当前支持 TXT 参考小说导入、章节边界审核、分批参考分析、设定候选导入、改写意见管理、改编总方案生成与确认门、逐章完全重写、三项检查与重点章节全文参考
 - **多语言**：每个项目在创建时选择 `zh` / `en`，决定 AI 提示词、生成正文、内置技能与 Agent 系统提示；前端 UI 语言独立可切换
 - **许可证**：MIT（见根目录 `LICENSE`）
 - **文档**：根目录 [`README.md`](README.md)（中文）+ [`README.en.md`](README.en.md)（英文，首行链接互通）
@@ -77,11 +77,11 @@ task dev                              # 编译并启动 Go 后端
 | `state.go` | `Progress`、`ChapterState`、`Foreshadow` 结构体，`LoadProgress`、`SaveProgress`（原子写入）、`ChapterMarkdownPath`、`SaveChapterMarkdown(projectDir, ...)`、`ForeshadowRoadmapPath`（项目目录 `Foreshadows.md`） |
 | `api.go` | `CallAPI`/`CallAPIMessages`（同步）、`CallAPIStream`/`CallAPIStreamMessages`（流式，支持完整多轮消息历史）、`CallAPIWithRetry`/`CallAPIWithRetryLog`（无限重试）、`CallAPIStreamWithRetry`/`CallAPIStreamWithRetryLog`，`validateAPIConfig`、`isFatalAPIError`（401/403/404 致命，网络超时可重试） |
 | `outline.go` | `generateOutline`、`reviseOutline`、`GenerateOutlineAction`（存在已确认章节时拒绝整体重新生成）、`ReviseOutlineAction`、`ConfirmOutlineAction`、`EditChapterOutline`、`cleanJSONResponse` |
-| `writing.go` | `GenerateChapterAction`（原创章节生成，含写前大纲一致性检查、事实核查、伏笔同步）、`RewriteChapterAction`（改写项目逐章完全重写：新稿 bible + 已确认方案 + 当前章参考分析 + 改写意见 + 前文新稿摘要；普通章节默认不喂原文全文）、`runRewriteChapterChecks`（意见符合度 / 结构保真 / 贴近原文风险三项检查，未通过自动重写最多 3 次并落盘 `RewriteCheckResult`）、`RecheckRewriteChapterAction`（章节修订后重跑三项检查）、`ReviseChapterAction`/`ReviseSpecificChapterAction`（修订后同步更新伏笔）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`、`checkOutlineConsistency`、章节内容生成/摘要/事实核查/流式输出、`buildHistorySummary`、`buildPreviousChapterTail`、`buildOutlineConstraints`、`appendIfMissingPlaceholder`、`splitChapterOpening` |
+| `writing.go` | `GenerateChapterAction`（原创章节生成，含写前大纲一致性检查、事实核查、伏笔同步）、`RewriteChapterAction`（改写项目逐章完全重写：新稿 bible + 已确认方案 + 当前章参考分析 + 改写意见 + 前文新稿摘要；普通章节默认不喂原文全文，`UseOriginalFullText` 开启时注入映射原章全文并记录日志）、`runRewriteChapterChecks`（意见符合度 / 结构保真 / 贴近原文风险三项检查，未通过自动重写最多 3 次并落盘 `RewriteCheckResult`；全文参考章节使用更严格相似度阈值）、`RecheckRewriteChapterAction`（章节修订后重跑三项检查）、`ReviseChapterAction`/`ReviseSpecificChapterAction`（修订后同步更新伏笔）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`、`checkOutlineConsistency`、章节内容生成/摘要/事实核查/流式输出、`buildHistorySummary`、`buildPreviousChapterTail`、`buildOutlineConstraints`、`appendIfMissingPlaceholder`、`splitChapterOpening` |
 | `foreshadow.go` | `SuggestForeshadows`、`UpdateForeshadows`、伏笔格式化注入、伏笔告警、`BuildForeshadowRoadmapMarkdown`、`SaveForeshadowRoadmap`、`syncForeshadowsAfterChapter`、`NextForeshadowID` |
 | `continue.go` | `AnalyzeExistingContent`、`ImportContinueAction`、`GenerateContinuationOutline`、`splitContentByChapters` |
 | `reference.go` | 改写项目阶段 1：`ReferenceBook` / `ReferenceChapter` / `ReferenceAnalysis` / `ReferenceChapterAnalysis` / `ReferenceSettingsCandidate` 结构体，`LoadReferenceBook`/`SaveReferenceBook`、`LoadReferenceAnalysis`/`SaveReferenceAnalysis`，`BuildReferenceBookFromContent`（复用 `splitContentByChapters` 正则拆章并保存 `reference/Chapter_XXX.txt`）、`ReplaceReferenceChapters`（按编辑列表直接落盘，避免标题非标准时被重新合并）、`AnalyzeReferenceBook`（逐章/分块分析 + 全书合并）、`ApplyReferenceSettingsImport`（空设定自动导入，已有设定候选需确认） |
-| `rewrite.go` | 改写项目阶段 2-3：`RewriteRequest` / `RewritePlan` / `ChapterMapping` / `RewriteChapterPlan` / `RewriteRequestImpact` / `RewriteCheckResult` 结构体，`LoadRewriteRequests`/`SaveRewriteRequests`、`LoadRewritePlan`/`SaveRewritePlan`，`GenerateRewritePlanAction`（参考分析 + 改写意见 → 分段规划要点 → 改编总方案 JSON）、`ValidateRewritePlanMappings`（每个原文章节至少覆盖一次，校验多对多映射）、`ConfirmRewritePlan`（确认门：生成 `state.Chapters` 新稿 pending 骨架，`Phase="writing"`，不覆盖已有正文/审核/已确认章节）、`UpsertRewriteCheckResult`（保存三项检查结果与章节需复核状态）、`ApplyConfirmedRewriteRequestChange`（方案确认后新增/修改/删除意见：已写章标记需复核，未写章计划追加约束） |
+| `rewrite.go` | 改写项目阶段 2-4：`RewriteRequest` / `RewritePlan` / `ChapterMapping` / `RewriteChapterPlan` / `RewriteRequestImpact` / `RewriteCheckResult` 结构体，`LoadRewriteRequests`/`SaveRewriteRequests`、`LoadRewritePlan`/`SaveRewritePlan`，`GenerateRewritePlanAction`（参考分析 + 改写意见 → 分段规划要点 → 改编总方案 JSON）、`ValidateRewritePlanMappings`（每个原文章节至少覆盖一次，校验多对多映射；`UseOriginalFullText=true` 时必须填写 `FullTextReason`）、`ConfirmRewritePlan`（确认门：生成 `state.Chapters` 新稿 pending 骨架，`Phase="writing"`，不覆盖已有正文/审核/已确认章节）、`UpsertRewriteCheckResult`（保存三项检查结果与章节需复核状态）、`ApplyConfirmedRewriteRequestChange`（方案确认后新增/修改/删除意见：已写章标记需复核，未写章计划追加约束） |
 | `similarity.go` | 改写项目贴近原文确定性检查：`AssessSimilarity` 按字符 n-gram、句子重合、最长连续片段检测源文/新稿文本相似度，输出 `SimilarityResult`、风险等级、阈值与高风险片段；中文按字符/句子级处理，不依赖空格分词或外部库 |
 | `similarity_test.go` | `similarity.go` 的单元测试：覆盖中文无空格文本、逐字复用、严格阈值不弱于普通阈值、长公共片段升级、长文本 LCS 截断、短文本 n-gram 等边界 |
 | `reconcile.go` | `ReconcileSettingsAction`、`regeneratePendingOutlines`、设定协调逻辑 |
@@ -123,7 +123,7 @@ task dev                              # 编译并启动 Go 后端
 | `src/pages/Projects.svelte` | 项目选择页：新建项目（含 `original`/`rewrite` 项目类型下拉、中文/English 语言下拉，POST 时携带 `project_type` + `language`）+ 项目列表（每项显示类型 badge + 语言 badge，可选择/删除）；选中项目后 `setLocale(project.language)` 并加载 `referenceState` / `rewriteState`（仅改写项目） |
 | `src/pages/Reference.svelte` | 改写项目阶段 1 原文页：浏览器 FileReader 读取 `.txt` 或粘贴正文 → `POST /api/reference/import`；展示参考章节统计与列表；`GET /api/reference?include_content=1` 后可审核/编辑章节标题与正文、插入章节并 `PUT /api/reference/chapters`；触发 `POST /api/reference/analyze` 分批分析；展示全书/逐章分析与设定候选，已有设定项目需 `POST /api/reference/settings/import` 确认导入 |
 | `src/pages/RewriteRequests.svelte` | 改写意见页：`GET /api/rewrite` 加载意见与方案状态；支持全局/单章/章节范围/角色/设定/关系线/结局/禁止项意见 CRUD（强度、优先级、影响后续开关），保存后方案状态回到 draft（已确认方案除外；确认后新增/修改/删除意见会标记受影响章节需复核，不静默覆盖已写正文） |
-| `src/pages/RewritePlan.svelte` | 改编方案页：`POST /api/rewrite/plan/generate` 异步生成方案；展示全书方向、意见影响地图、章节多对多映射、新稿章节计划；支持 JSON 编辑 `PUT /api/rewrite/plan`；`POST /api/rewrite/plan/confirm` 通过映射校验后生成 `state.Chapters` pending 新稿骨架 |
+| `src/pages/RewritePlan.svelte` | 改编方案页：`POST /api/rewrite/plan/generate` 异步生成方案；展示全书方向、意见影响地图、章节多对多映射、新稿章节计划；支持 JSON 编辑 `PUT /api/rewrite/plan`；每章可切换 `use_original_full_text` 并填写/保存 `full_text_reason`（开启后后端强制理由并使用严格贴近度阈值）；`POST /api/rewrite/plan/confirm` 通过映射校验后生成 `state.Chapters` pending 新稿骨架 |
 | `src/pages/Config.svelte` | 配置页：API 配置（含上下文预算 tokens）、故事配置（直接 PUT 保存 + 关键设定变更时提示协调）、角色管理、世界观管理、组织管理（卡片 + 成员勾选）、关系管理（卡片 + 源/目标实体选择）；任务运行时所有输入控件禁用 |
 | `src/pages/Outline.svelte` | 大纲页：直接操作按钮（生成/确认/修订意见/删除/生成后续大纲）+ 导入续写 + pending 章节内联编辑 + 流式预览 |
 | `src/pages/Writing.svelte` | 写作页：章节列表（状态点）+ 直接操作（生成/确认/修改意见/去AI味，自动区分当前章修订与定向修订）+ 自动确认模式开关（toggle，随时可开关）+ 伏笔追踪摘要卡片（活跃/超期/临近回收）+ 改写项目三项检查面板（意见符合度/结构保真/贴近风险、确定性相似度指标、高风险片段、需复核原因）+ 优化章节衔接（进度卡片工具栏小按钮，已确认 ≥ 2 章时显示）+ 导出 TXT + 复制 + 上下章导航 + 流式尾部窗口展示（含「仅显示最新内容」提示，字数用 streamCharCount）+ rAF 自动滚动（自动确认模式下自动跟随正在生成的章节）+ 全书完成后展示 `PostProcessPanel` |
@@ -144,7 +144,7 @@ task dev                              # 编译并启动 Go 后端
 
 启动时不绑定具体项目，前端显示项目选择页面。用户选择/创建项目后，后端通过 `switchProject()` 加载对应项目的全部数据。
 
-### 改写项目（阶段 1-3）
+### 改写项目（阶段 1-4）
 
 `Config.ProjectType` 控制项目类型：`original` 使用原有大纲/写作/伏笔流程；`rewrite` 当前显示配置、原文/参考、改写意见、改编方案、写作、伏笔、图谱、技能导航。旧项目缺字段时 `NormalizeProjectType` 归一为 `original`。
 
@@ -170,6 +170,7 @@ API：
 - `POST /api/rewrite/requests` / `PUT /api/rewrite/requests/{id}` / `DELETE /api/rewrite/requests/{id}`：改写意见 CRUD；支持 global/chapter/range/character/setting/relationship/ending/forbidden
 - `POST /api/rewrite/plan/generate`：异步任务 `rewrite_plan_generate`，使用参考分析 + 改写意见生成总方案；材料过长时先用 `RewritePlanChunkAnalysis` 分段提取规划要点，再用 `RewritePlanGeneration` 输出最终 JSON
 - `PUT /api/rewrite/plan`：保存人工编辑后的方案 JSON，并重新做章节映射完整性校验
+- 重点章节全文参考：`RewriteChapterPlan.UseOriginalFullText` / `FullTextReason` 可在改编方案页按章保存；后端校验开启全文参考时必须填写理由。生成时 `RewriteChapterAction` 注入映射原章全文，`AssessSimilarity(..., strict=true)` 使用更严格阈值
 - `POST /api/rewrite/plan/confirm`：确认门；校验每个原文章节至少被一个新稿章节覆盖，拒绝覆盖已有正文/审核/已确认新稿章节，通过后生成 `state.Chapters` pending 骨架并进入 `Phase="writing"`
 - `POST /api/chapter/generate`：改写项目分流为异步任务 `rewrite_chapter_generation`，调用 `RewriteChapterAction`；prompt 注入新稿 bible、已确认方案、当前章参考分析（普通章节默认不含原文全文）、影响本章的改写意见、前文新稿摘要、设定/关系/伏笔状态
 - 改写章节生成后执行三项检查：`RewriteComplianceCheck`（意见符合度）、`StructureFidelityCheck`（结构保真）、`ClosenessCheck`（贴近原文风险）；贴近风险同时运行 `AssessSimilarity` 确定性算法（字符 n-gram、句子重合、最长连续片段、高风险片段）。任一检查 FAIL 会带问题反馈自动重写，最多 3 次；最终结果写入 `rewrite_plan.json` 的 `CheckResults` 与章节 `last_check_result`

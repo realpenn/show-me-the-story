@@ -7,6 +7,7 @@
   let loading = false;
   let editingJSON = false;
   let jsonText = '';
+  let savingFullTextNum = 0;
 
   $: rewrite = $rewriteState || {};
   $: requests = rewrite.requests || [];
@@ -71,6 +72,28 @@
 
   function mappingLabel(m) {
     return `${m.target_chapter_num} ← ${(m.source_chapter_nums || []).join(', ')}`;
+  }
+
+  async function saveChapterFullText(ch) {
+    if (ch.use_original_full_text && !String(ch.full_text_reason || '').trim()) {
+      addToast($t('rewritePlan.fullText.needReason'), 'error');
+      return;
+    }
+    savingFullTextNum = ch.num;
+    try {
+      const next = JSON.parse(JSON.stringify(plan || {}));
+      const target = (next.chapters || []).find(item => item.num === ch.num);
+      if (!target) throw new Error($t('rewritePlan.fullText.notFound'));
+      target.use_original_full_text = !!ch.use_original_full_text;
+      target.full_text_reason = target.use_original_full_text ? String(ch.full_text_reason || '').trim() : '';
+      const saved = await api('PUT', '/api/rewrite/plan', next);
+      rewriteState.update(r => ({ ...(r || {}), plan: saved }));
+      addToast($t('rewritePlan.fullText.saved'), 'success');
+    } catch (e) {
+      addToast(e.message, 'error');
+    } finally {
+      savingFullTextNum = 0;
+    }
   }
 </script>
 
@@ -193,6 +216,9 @@
                 # {ch.num} {ch.title}
                 <span class="badge badge-ghost badge-xs ml-2">{(ch.source_chapter_nums || []).join(', ')}</span>
                 <span class="badge badge-outline badge-xs">{ch.mapping_type}</span>
+                {#if ch.use_original_full_text}
+                  <span class="badge badge-warning badge-xs">{$t('rewritePlan.fullText.badge')}</span>
+                {/if}
               </summary>
               <div class="mt-2 text-sm space-y-2">
                 <p class="whitespace-pre-wrap">{ch.outline}</p>
@@ -205,6 +231,35 @@
                 {#if ch.forbidden_close_points?.length}
                   <div class="text-xs text-warning">{$t('rewritePlan.chapters.forbidden')}: {ch.forbidden_close_points.join(' / ')}</div>
                 {/if}
+                <div class="bg-base-200 rounded p-2 space-y-2">
+                  <label class="flex items-center gap-2 cursor-pointer text-xs">
+                    <input
+                      type="checkbox"
+                      class="toggle toggle-warning toggle-xs"
+                      bind:checked={ch.use_original_full_text}
+                      disabled={$taskRunning || savingFullTextNum === ch.num}
+                    />
+                    <span>{$t('rewritePlan.fullText.toggle')}</span>
+                  </label>
+                  {#if ch.use_original_full_text}
+                    <textarea
+                      class="textarea textarea-sm w-full h-16 text-xs"
+                      bind:value={ch.full_text_reason}
+                      placeholder={$t('rewritePlan.fullText.reason')}
+                      disabled={$taskRunning || savingFullTextNum === ch.num}
+                    ></textarea>
+                    <div class="flex items-center gap-2">
+                      <span class="text-xs text-warning flex-1">{$t('rewritePlan.fullText.strict')}</span>
+                      <button class="btn btn-warning btn-xs" on:click={() => saveChapterFullText(ch)} disabled={$taskRunning || savingFullTextNum === ch.num || !String(ch.full_text_reason || '').trim()}>
+                        {savingFullTextNum === ch.num ? $t('common.saving') : $t('common.save')}
+                      </button>
+                    </div>
+                  {:else}
+                    <div class="flex justify-end">
+                      <button class="btn btn-ghost btn-xs" on:click={() => saveChapterFullText(ch)} disabled={$taskRunning || savingFullTextNum === ch.num}>{savingFullTextNum === ch.num ? $t('common.saving') : $t('common.save')}</button>
+                    </div>
+                  {/if}
+                </div>
               </div>
             </details>
           {/each}

@@ -149,6 +149,9 @@ func RewriteChapterAction(ctx context.Context, apiCfg *APIConfig, cfg *Config, s
 	if err != nil {
 		return err
 	}
+	if chapterPlan.UseOriginalFullText {
+		logger.Warn(fmt.Sprintf("第 %d 章已启用原文全文参考，将注入原章全文并使用更严格的贴近度阈值。理由：%s", ch.Num, chapterPlan.FullTextReason))
+	}
 
 	ch.Status = StatusWriting
 	if err := SaveProgress(progressPath, state); err != nil {
