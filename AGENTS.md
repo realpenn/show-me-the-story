@@ -4,13 +4,14 @@
 
 ## 项目概述
 
-单二进制 Go Web 应用，Go 后端零外部依赖（仅标准库），通过 OpenAI 兼容 API 自动生成长篇小说。前端使用 Vite + Svelte 4 + DaisyUI 4 构建，产物通过 `embed.FS` 内嵌到二进制中。
+单二进制 Go Web 应用，Go 后端零外部依赖（仅标准库），通过 OpenAI 兼容 API 自动生成长篇小说。前端使用 Vite + Svelte 4 + DaisyUI 5 构建，产物通过 `embed.FS` 内嵌到二进制中。
 
 - **Go 版本**：1.25.1
 - **模块名**：`showmethestory`
 - **默认端口**：`:48090`（可通过 `PORT` 环境变量覆盖）
 - **前端**：Vite 5 + Svelte 4 + Tailwind CSS 4 + DaisyUI 5（xianii 暗色主题）
 - **项目目录**：`storys/`（程序同目录下，每个故事项目一个子目录）
+- **项目类型**：`Config.ProjectType` 为 `original` / `rewrite`，旧项目缺省 `original`；改写项目当前支持 TXT 参考小说导入、章节边界审核、分批参考分析与设定候选导入
 - **多语言**：每个项目在创建时选择 `zh` / `en`，决定 AI 提示词、生成正文、内置技能与 Agent 系统提示；前端 UI 语言独立可切换
 - **许可证**：MIT（见根目录 `LICENSE`）
 - **文档**：根目录 [`README.md`](README.md)（中文）+ [`README.en.md`](README.en.md)（英文，首行链接互通）
@@ -51,6 +52,7 @@ task dev                              # 编译并启动 Go 后端
                   ├─ writing.go     ← 写作阶段逻辑 + 上下文注入 + 去AI味
                   ├─ foreshadow.go  ← 伏笔系统
                   ├─ continue.go    ← 续写功能（导入分析）
+                  ├─ reference.go   ← 改写项目参考小说导入/章节持久化/分批分析/设定候选
                   ├─ reconcile.go   ← 设定协调逻辑（AI 自动兼容新旧设定）
                   ├─ settings.go    ← 结构化设定（角色/世界观/组织/关系）CRUD + 持久化
                   ├─ skills.go      ← Skill 系统（内置 + 项目级，可选启用）
@@ -69,25 +71,26 @@ task dev                              # 编译并启动 Go 后端
 | 文件 | 职责 |
 |------|------|
 | `main.go` | 入口，确定程序目录（`progDir`），创建 `storys/` 目录，加载 API 配置，启动 Web 服务器（无项目选择状态） |
-| `config.go` | `APIConfig`（含 `ContextBudgetTokens` 全书优化上下文预算）、`Config`（含 `SkillConfig` + `Language`）、`StoryConfig`、`PromptsConfig` 结构体，Load/Save 函数，`DefaultConfigForLang(lang)`、`NormalizeLanguage`、`applyDefaults(lang)` 按语言选择默认 prompts |
+| `config.go` | `APIConfig`（含 `ContextBudgetTokens` 全书优化上下文预算）、`Config`（含 `ProjectType`、`SkillConfig` + `Language`）、`StoryConfig`、`PromptsConfig` 结构体，Load/Save 函数，`DefaultConfigForLang(lang)`、`NormalizeLanguage`、`NormalizeProjectType`、`applyDefaults(lang)` 按语言选择默认 prompts |
 | `state.go` | `Progress`、`ChapterState`、`Foreshadow` 结构体，`LoadProgress`、`SaveProgress`（原子写入）、`ChapterMarkdownPath`、`SaveChapterMarkdown(projectDir, ...)`、`ForeshadowRoadmapPath`（项目目录 `Foreshadows.md`） |
 | `api.go` | `CallAPI`/`CallAPIMessages`（同步）、`CallAPIStream`/`CallAPIStreamMessages`（流式，支持完整多轮消息历史）、`CallAPIWithRetry`/`CallAPIWithRetryLog`（无限重试）、`CallAPIStreamWithRetry`/`CallAPIStreamWithRetryLog`，`validateAPIConfig`、`isFatalAPIError`（401/403/404 致命，网络超时可重试） |
 | `outline.go` | `generateOutline`、`reviseOutline`、`GenerateOutlineAction`（存在已确认章节时拒绝整体重新生成）、`ReviseOutlineAction`、`ConfirmOutlineAction`、`EditChapterOutline`、`cleanJSONResponse` |
 | `writing.go` | `GenerateChapterAction`（含写前大纲一致性检查，共 5 步；第 5 步更新伏笔并落盘 `Foreshadows.md`）、`ReviseChapterAction`/`ReviseSpecificChapterAction`（修订后同步更新伏笔）、`ConfirmChapterAction`、`PolishChapterAction`、`SmoothTransitionsAction`（批量优化已确认章节衔接，逐章最小化重写开头、逐章落盘）、`parseFactCheckResult`（JSON 优先 + 字符串 fallback）、`checkOutlineConsistency`（写前检查本章大纲与已写剧情冲突，冲突时最小化修订本章大纲）、章节内容生成/摘要/事实核查/流式输出、`buildHistorySummary`、`buildPreviousChapterTail`（上一章尾部约 800 字注入写作 prompt）、`buildOutlineConstraints`（全书章节脉络反向约束：后续 10 章大纲防提前出现 + 前文大纲防一次性事件重复，注入写作与事实核查 prompt）、`appendIfMissingPlaceholder`（老项目持久化旧模板缺新占位符时把上下文块追加到渲染结果末尾兜底）、`splitChapterOpening` |
 | `foreshadow.go` | `SuggestForeshadows`、`UpdateForeshadows`、伏笔格式化注入、伏笔告警、`BuildForeshadowRoadmapMarkdown`、`SaveForeshadowRoadmap`、`syncForeshadowsAfterChapter`、`NextForeshadowID` |
 | `continue.go` | `AnalyzeExistingContent`、`ImportContinueAction`、`GenerateContinuationOutline`、`splitContentByChapters` |
+| `reference.go` | 改写项目阶段 1：`ReferenceBook` / `ReferenceChapter` / `ReferenceAnalysis` / `ReferenceChapterAnalysis` / `ReferenceSettingsCandidate` 结构体，`LoadReferenceBook`/`SaveReferenceBook`、`LoadReferenceAnalysis`/`SaveReferenceAnalysis`，`BuildReferenceBookFromContent`（复用 `splitContentByChapters` 正则拆章并保存 `reference/Chapter_XXX.txt`）、`ReplaceReferenceChapters`（按编辑列表直接落盘，避免标题非标准时被重新合并）、`AnalyzeReferenceBook`（逐章/分块分析 + 全书合并）、`ApplyReferenceSettingsImport`（空设定自动导入，已有设定候选需确认） |
 | `reconcile.go` | `ReconcileSettingsAction`、`regeneratePendingOutlines`、设定协调逻辑 |
 | `settings.go` | `Character`、`WorldviewEntry`、`Organization`、`Relation`、`ProjectSettings` 结构体，`LoadProjectSettings`、`SaveProjectSettings`、`buildCharacterContext`、`buildWorldviewContext` |
 | `skills.go` | `Skill`、`SkillConfig` 结构体，`LoadBuiltinSkills`、`LoadProjectSkills`、`MergeSkills`、`GetEnabledSkills`、`GetEnabledSkillsByCategory`、`FormatSkillsContent`，`//go:embed embeds/skills` |
 | `agent.go` | `Tool`、`AgentContext`、`AgentStep`、`ToolCall` 结构体，`RunAgentLoop`（多轮消息历史 + 双语 tool 结果标签）、工具调用解析、内置工具集（读/写角色/世界观/章节等）、`buildAgentSystemPromptZH`/`buildAgentSystemPromptEN` 按项目语言选择系统提示、`requireConfirm`（破坏性工具需 `confirm: true`） |
 | `chat.go` | `ChatSession`、`ChatMessage`、`ChatSessionIndex` 结构体，`LoadChatSessions`、`LoadChatSession`、`SaveChatSession`、`DeleteChatSession` |
 | `postprocess.go` | `PostProcessState`/`RoadmapItem` 结构体，`LoadPostProcess`/`SavePostProcess`（`postprocess.json`）、`buildPostProcessBundle`（设定+摘要+全文组装与长文策略：全文/摘要模式）、`DiagnoseBookAction`、`ConsistencyCheckBookAction`（超长书按卷分段）、`BuildRoadmapAction`、`FullPostProcessAnalyzeAction`（诊断→核查→路线图）、`ExecuteRoadmapAction`（可选前置衔接优化 + 逐条定向修订/润色 + diff 节选） |
-| `handlers.go` | `Handlers` 结构体（含项目管理字段 `progDir`/`projectName`/`projectMu`、自动确认开关 `autoConfirm`、`postprocess`/`postprocessPath`）、`projectDir()` 帮助函数、项目切换 `switchProject()`、`ensureProject()` 检查、`rejectIfTaskRunning()`（任务运行期间编辑类端点返回 409）、所有 HTTP handler（含 `PostChapterPolish` 单章去AI味、`PostChapterReviseSpecific` 定向修订、`PostChaptersSmoothTransitions` 批量衔接优化、全书优化 `GetPostProcess`/`PostPostProcessDiagnose`/`PostPostProcessConsistency`/`PostPostProcessRoadmap`/`PutPostProcessRoadmap`/`PostPostProcessExecute`/`DeletePostProcess`、`GetAutoConfirm`/`PutAutoConfirm`）、`PostChapterGenerate` 自动确认循环（开启时每章生成后自动确认并继续下一章）、`tryStartTask`/`endTask`/`startChildWork` 互斥、项目管理 handler（`GetProjects`/`PostProject`/`PostProjectSelect`/`GetProjectCurrent`/`DeleteProject`） |
-| `web.go` | 路由注册（含项目管理端点、`/api/autoconfirm`）、CORS/日志中间件、静态文件服务、`startWebServer`、项目管理 handler（`GetProjects`/`PostProject`/`GetProjectCurrent`/`PostProjectSelect`/`DeleteProject`） |
+| `handlers.go` | `Handlers` 结构体（含项目管理字段 `progDir`/`projectName`/`projectMu`、自动确认开关 `autoConfirm`、`postprocess`/`postprocessPath`、`reference`/`referencePath`、`referenceAnalysis`/`referenceAnalysisPath`）、`projectDir()` 帮助函数、项目切换 `switchProject()`、`ensureProject()`/`ensureRewriteProject()` 检查、`rejectIfTaskRunning()`（任务运行期间编辑类端点返回 409）、所有 HTTP handler（含参考书 `GetReference`/`PostReferenceImport`/`PutReferenceChapters`/`PostReferenceAnalyze`/`PostReferenceSettingsImport`、`PostChapterPolish` 单章去AI味、`PostChapterReviseSpecific` 定向修订、`PostChaptersSmoothTransitions` 批量衔接优化、全书优化 `GetPostProcess`/`PostPostProcessDiagnose`/`PostPostProcessConsistency`/`PostPostProcessRoadmap`/`PutPostProcessRoadmap`/`PostPostProcessExecute`/`DeletePostProcess`、`GetAutoConfirm`/`PutAutoConfirm`）、`PostChapterGenerate` 自动确认循环（开启时每章生成后自动确认并继续下一章）、`tryStartTask`/`endTask`/`startChildWork` 互斥、项目管理 handler（`GetProjects`/`PostProject`/`PostProjectSelect`/`GetProjectCurrent`/`DeleteProject`） |
+| `web.go` | 路由注册（含项目管理端点、参考书端点、`/api/autoconfirm`）、CORS/日志中间件、静态文件服务、`startWebServer`、项目管理 handler（`GetProjects`/`PostProject`/`GetProjectCurrent`/`PostProjectSelect`/`DeleteProject`，创建/列表/当前项目均带 `project_type`） |
 | `logger.go` | `LogBroadcaster`（SSE 广播）、所有日志/事件方法（含 `ChatChunk`、`ToolCallStart`、`ToolCallEnd`、`StreamStart`、`StreamProgress`、`PolishResult`、`PostProcessReport`、`PostProcessRoadmap`、`PostProcessItemDone`、`PostProcessUpdate`）、`LogEntry.MsgEN` 可选英文版、`logBilingual` 与 `InfoBilingual`/`ErrorBilingual`/`WarnBilingual`/`SuccessBilingual` |
-| `prompts.go` | `RenderPrompt`（`{{.KeyName}}` 替换）、`DefaultPromptsZH` 变量（所有内置中文提示词模板）、`DefaultPromptsForLang(lang)` |
-| `prompts_en.go` | `DefaultPromptsEN`：16 个 prompt 字段全量英文模板（与中文一一对应） |
-| `locale.go` | `LangZH`/`LangEN` 常量、`localeFromRequest` 从 `X-UI-Locale`/`Accept-Language`/`?locale=` 解析、`errorCatalog` 双语错误表、`T(lang, key, args)`、`systemPrompts` 内联 system prompt 集中表、`SystemPromptFor(lang, key)`、`Handlers.writeErrorReq` 本地化错误响应 |
+| `prompts.go` | `RenderPrompt`（`{{.KeyName}}` 替换）、`DefaultPromptsZH` 变量（所有内置中文提示词模板，含 `ReferenceChapterAnalysis` / `ReferenceBookAnalysis`）、`DefaultPromptsForLang(lang)` |
+| `prompts_en.go` | `DefaultPromptsEN`：英文模板全集（与中文一一对应，含参考书分析模板） |
+| `locale.go` | `LangZH`/`LangEN` 常量、`localeFromRequest` 从 `X-UI-Locale`/`Accept-Language`/`?locale=` 解析、`errorCatalog` 双语错误表、`T(lang, key, args)`、`systemPrompts` 内联 system prompt 集中表（含 `reference_analysis_json`）、`SystemPromptFor(lang, key)`、`Handlers.writeErrorReq` 本地化错误响应 |
 | `i18n_inject.go` | 注入块的双语版本：`buildOutlineConstraintsForLang`、`buildPreviousChapterTailForLang`、`buildHistorySummaryForLang`、`buildCharacterContextForLang`、`buildWorldviewContextForLang`、`formatActiveForeshadowsForChapterLang`、`formatChapterLine`、`formatForeshadowsForPromptLang` |
 | `filesys.go` | `writeFileImpl`、`deleteFileImpl`、`renameFileImpl` |
 | `skills.go` | `Skill`（含 `Lang` 字段）、`SkillConfig` 结构体，`LoadBuiltinSkills`、`LoadProjectSkills`、`MergeSkills`、`GetEnabledSkills`、`GetEnabledSkillsByCategory`、`FilterSkillsByLang(skills, projectLang)`、`FormatSkillsContent`（按 skill 语言选择双语 header）、`//go:embed embeds/skills` |
@@ -104,15 +107,16 @@ task dev                              # 编译并启动 Go 后端
 | `index.html` | 入口 HTML，`data-theme="xianii"` |
 | `src/main.js` | Svelte 应用挂载点 |
 | `src/app.css` | 全局样式：Tailwind 指令 + 自定义滚动条/toast 动画 |
-| `src/App.svelte` | 根组件：Header（项目badge + 项目语言 badge ZH/EN + 「切换 / 新建项目」按钮（任务运行时禁用）+ 阶段badge + 章节进度badge + AI思考中badge + 右侧 UI 语言切换按钮中 / EN） + 顶部导航（配置/大纲/写作/伏笔/图谱/技能，带图标） + 页面路由 + LogPanel + Toast 容器；初始加载若有当前项目则 `setLocale(project.language)` |
+| `src/App.svelte` | 根组件：Header（项目badge + 项目类型 badge + 项目语言 badge ZH/EN + 「切换 / 新建项目」按钮（任务运行时禁用）+ 阶段badge + 章节进度badge + AI思考中badge + 右侧 UI 语言切换按钮中 / EN） + 顶部导航（原创项目：配置/大纲/写作/伏笔/图谱/技能；改写项目：配置/原文/图谱/技能，带图标） + 页面路由 + LogPanel + Toast 容器；初始加载若有当前项目则 `setLocale(project.language)` 并设置 `currentProjectType` |
 | `src/lib/api.js` | `api(method, url, body)` — fetch 封装，自动带 `X-UI-Locale`/`Accept-Language` 头，错误消息走 `translateServerMessage` |
 | `src/lib/router.js` | `currentPage` store + hash 路由监听 |
-| `src/lib/stores.js` | 全局 Svelte stores（progress、config、settings、postprocess、taskRunning、streamCharCount、autoConfirm、lastFailedTask、`projectLanguage` 等）+ toast/log 管理 |
-| `src/lib/sse.js` | `connectSSE()` — EventSource 连接 URL 拼 `?locale=` + 多种事件处理 → 更新 stores；content_chunk/chat_chunk 按 150ms 节流缓冲批量刷入；章节流式全文只存模块级变量，`streamingContent` store 仅保留尾部窗口（约 3000 字符）；`refreshProgress()` 对 progress_update 拉取做 500ms 去抖（task_end 立即刷新）；stream_start 事件清空流式缓冲；`log` 事件优先用 `msg_en` 字段，否则 `translateServerMessage`；任务名通过 i18n `task.<name>` 翻译；全书优化 `postprocess_update`/`postprocess_roadmap`/`postprocess_item_done` 事件 |
+| `src/lib/stores.js` | 全局 Svelte stores（progress、config、settings、postprocess、referenceState、taskRunning、streamCharCount、autoConfirm、lastFailedTask、`projectLanguage`、`currentProjectType` 等）+ toast/log 管理 |
+| `src/lib/sse.js` | `connectSSE()` — EventSource 连接 URL 拼 `?locale=` + 多种事件处理 → 更新 stores；content_chunk/chat_chunk 按 150ms 节流缓冲批量刷入；章节流式全文只存模块级变量，`streamingContent` store 仅保留尾部窗口（约 3000 字符）；`refreshProgress()` 对 progress_update 拉取做 500ms 去抖（task_end 立即刷新）；stream_start 事件清空流式缓冲；`log` 事件优先用 `msg_en` 字段，否则 `translateServerMessage`；任务名通过 i18n `task.<name>` 翻译；参考书任务 `reference_import`/`reference_analyze` 完成后刷新 `referenceState`，`reference_update` 事件直接更新；全书优化 `postprocess_update`/`postprocess_roadmap`/`postprocess_item_done` 事件 |
 | `src/lib/markdown.js` | `renderMarkdown(text)` — marked 解析 + DOMPurify 清洗，供聊天气泡渲染 markdown |
 | `src/lib/i18n/index.js` | i18n 核心：`uiLocale` store（持久化到 `localStorage`）、`setLocale`/`getLocale`、`t` 派生 store（`$t('key', params)`，插值 `{name}`）、`translate` 命令式、`translateServerMessage(msg, lang)` 把后端中文映射到英文（含 errorCatalog 镜像 + 常见 log + 动态前缀） |
 | `src/lib/i18n/zh.js`, `en.js` | 扁平 key 字典；新增可见文案必须同时在两个文件加 key |
-| `src/pages/Projects.svelte` | 项目选择页：新建项目（含中文/English 语言下拉，POST 时携带 `language`）+ 项目列表（每项显示语言 badge，可选择/删除）；选中项目后 `setLocale(project.language)` |
+| `src/pages/Projects.svelte` | 项目选择页：新建项目（含 `original`/`rewrite` 项目类型下拉、中文/English 语言下拉，POST 时携带 `project_type` + `language`）+ 项目列表（每项显示类型 badge + 语言 badge，可选择/删除）；选中项目后 `setLocale(project.language)` 并加载 `referenceState`（仅改写项目） |
+| `src/pages/Reference.svelte` | 改写项目阶段 1 原文页：浏览器 FileReader 读取 `.txt` 或粘贴正文 → `POST /api/reference/import`；展示参考章节统计与列表；`GET /api/reference?include_content=1` 后可审核/编辑章节标题与正文、插入章节并 `PUT /api/reference/chapters`；触发 `POST /api/reference/analyze` 分批分析；展示全书/逐章分析与设定候选，已有设定项目需 `POST /api/reference/settings/import` 确认导入 |
 | `src/pages/Config.svelte` | 配置页：API 配置（含上下文预算 tokens）、故事配置（直接 PUT 保存 + 关键设定变更时提示协调）、角色管理、世界观管理、组织管理（卡片 + 成员勾选）、关系管理（卡片 + 源/目标实体选择）；任务运行时所有输入控件禁用 |
 | `src/pages/Outline.svelte` | 大纲页：直接操作按钮（生成/确认/修订意见/删除/生成后续大纲）+ 导入续写 + pending 章节内联编辑 + 流式预览 |
 | `src/pages/Writing.svelte` | 写作页：章节列表（状态点）+ 直接操作（生成/确认/修改意见/去AI味，自动区分当前章修订与定向修订）+ 自动确认模式开关（toggle，随时可开关）+ 伏笔追踪摘要卡片（活跃/超期/临近回收）+ 优化章节衔接（进度卡片工具栏小按钮，已确认 ≥ 2 章时显示）+ 导出 TXT + 复制 + 上下章导航 + 流式尾部窗口展示（含「仅显示最新内容」提示，字数用 streamCharCount）+ rAF 自动滚动（自动确认模式下自动跟随正在生成的章节）+ 全书完成后展示 `PostProcessPanel` |
@@ -132,6 +136,29 @@ task dev                              # 编译并启动 Go 后端
 `main.go` 接受命令行参数 `os.Args[1]` 作为程序基础目录（`progDir`），默认为当前目录。在 `progDir` 下自动创建 `storys/` 目录，每个故事项目是 `storys/{projectName}/` 子目录。`api.json` 始终在 `progDir` 下（全局共享）。所有项目文件（`progress.json`、`config.json`、`settings.json`、`sessions/`）都在各自项目目录中。
 
 启动时不绑定具体项目，前端显示项目选择页面。用户选择/创建项目后，后端通过 `switchProject()` 加载对应项目的全部数据。
+
+### 改写项目（阶段 1）
+
+`Config.ProjectType` 控制项目类型：`original` 使用原有大纲/写作/伏笔流程；`rewrite` 当前显示配置、原文/参考、图谱、技能导航。旧项目缺字段时 `NormalizeProjectType` 归一为 `original`。
+
+改写项目阶段 1 的参考书数据不写入 `state.Chapters`，避免污染后续新稿线性主轴：
+
+```
+storys/{projectName}/
+├── reference.json              # ReferenceBook：参考书元数据、章节列表、章节 TXT 相对路径
+├── reference_analysis.json     # ReferenceAnalysis：全书级 + 每章级结构化分析、设定候选、导入状态
+└── reference/
+    └── Chapter_001.txt         # 原文章节正文
+```
+
+API：
+- `GET /api/reference`：返回参考书元数据与分析；`?include_content=1` 时附带章节正文，供章节边界审核页使用
+- `POST /api/reference/import`：异步任务 `reference_import`，接收 `{content, source_name}`，复用 `splitContentByChapters` 的章节标题正则拆章，落盘 `reference/Chapter_XXX.txt` + `reference.json`，并清空旧分析
+- `PUT /api/reference/chapters`：同步编辑章节边界，按前端提交的章节列表直接落盘，不重新依赖标题正则切分，保存后清空旧分析
+- `POST /api/reference/analyze`：异步任务 `reference_analyze`，逐章/分块调用 `ReferenceChapterAnalysis`，再用 `ReferenceBookAnalysis` 合并全书分析；分块大小由 `context_budget_tokens` 推导并封顶
+- `POST /api/reference/settings/import`：已有设定项目手动确认导入分析得到的设定候选
+
+设定候选导入规则：空 `settings.json` 项目在参考分析完成后自动导入；已有设定时 `reference_analysis.json.settings_import_status = "preview_required"`，只展示候选，不静默覆盖，用户确认后才 append 新设定并尝试按名称解析关系端点。
 
 ### 前端构建
 

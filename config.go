@@ -7,15 +7,16 @@ import (
 )
 
 type APIConfig struct {
-	APIKey               string `json:"api_key"`
-	BaseURL              string `json:"base_url"`
-	Model                string `json:"model"`
-	HTTPTimeoutSeconds   int    `json:"http_timeout_seconds"`
-	ContextBudgetTokens  int    `json:"context_budget_tokens"` // 全书优化上下文预算，默认 900000
+	APIKey              string `json:"api_key"`
+	BaseURL             string `json:"base_url"`
+	Model               string `json:"model"`
+	HTTPTimeoutSeconds  int    `json:"http_timeout_seconds"`
+	ContextBudgetTokens int    `json:"context_budget_tokens"` // 全书优化上下文预算，默认 900000
 }
 
 type Config struct {
-	Language    string        `json:"language"` // "zh" 或 "en"，影响 AI 提示词与生成内容；旧项目缺省视为 "zh"
+	ProjectType string        `json:"project_type"` // "original" 或 "rewrite"；旧项目缺省视为 "original"
+	Language    string        `json:"language"`     // "zh" 或 "en"，影响 AI 提示词与生成内容；旧项目缺省视为 "zh"
 	Story       StoryConfig   `json:"story"`
 	Prompts     PromptsConfig `json:"prompts"`
 	SkillConfig *SkillConfig  `json:"skill_config,omitempty"`
@@ -24,6 +25,9 @@ type Config struct {
 const (
 	LangZH = "zh"
 	LangEN = "en"
+
+	ProjectTypeOriginal = "original"
+	ProjectTypeRewrite  = "rewrite"
 )
 
 // NormalizeLanguage returns "zh" / "en"; unknown values fall back to "zh".
@@ -34,6 +38,15 @@ func NormalizeLanguage(lang string) string {
 	default:
 		return LangZH
 	}
+}
+
+// NormalizeProjectType returns "original" / "rewrite"; unknown values fall back
+// to "original" so old projects keep their previous behavior.
+func NormalizeProjectType(projectType string) string {
+	if projectType == ProjectTypeRewrite {
+		return ProjectTypeRewrite
+	}
+	return ProjectTypeOriginal
 }
 
 type StoryConfig struct {
@@ -62,6 +75,8 @@ type PromptsConfig struct {
 	BookDiagnosis                 string `json:"book_diagnosis"`
 	BookConsistencyCheck          string `json:"book_consistency_check"`
 	BookRoadmap                   string `json:"book_roadmap"`
+	ReferenceChapterAnalysis      string `json:"reference_chapter_analysis"`
+	ReferenceBookAnalysis         string `json:"reference_book_analysis"`
 }
 
 func DefaultAPIConfig() *APIConfig {
@@ -78,7 +93,8 @@ func DefaultConfig() *Config {
 func DefaultConfigForLang(lang string) *Config {
 	lang = NormalizeLanguage(lang)
 	cfg := &Config{
-		Language: lang,
+		ProjectType: ProjectTypeOriginal,
+		Language:    lang,
 		Story: StoryConfig{
 			ChapterCount:          30,
 			TargetWordsPerChapter: 2500,
@@ -153,6 +169,7 @@ func LoadConfig(path string) (*Config, error) {
 	}
 
 	cfg.Language = NormalizeLanguage(cfg.Language)
+	cfg.ProjectType = NormalizeProjectType(cfg.ProjectType)
 	cfg.Prompts.applyDefaults(cfg.Language)
 
 	if cfg.SkillConfig == nil {
@@ -226,6 +243,12 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	}
 	if p.BookRoadmap == "" {
 		p.BookRoadmap = defaults.BookRoadmap
+	}
+	if p.ReferenceChapterAnalysis == "" {
+		p.ReferenceChapterAnalysis = defaults.ReferenceChapterAnalysis
+	}
+	if p.ReferenceBookAnalysis == "" {
+		p.ReferenceBookAnalysis = defaults.ReferenceBookAnalysis
 	}
 }
 

@@ -45,6 +45,12 @@ func startWebServer(apiCfg *APIConfig, apiCfgPath string, cfg *Config, state *Pr
 	mux.HandleFunc("DELETE /api/progress", h.DeleteProgress)
 	mux.HandleFunc("GET /api/status", h.GetStatus)
 
+	mux.HandleFunc("GET /api/reference", h.GetReference)
+	mux.HandleFunc("POST /api/reference/import", h.PostReferenceImport)
+	mux.HandleFunc("PUT /api/reference/chapters", h.PutReferenceChapters)
+	mux.HandleFunc("POST /api/reference/analyze", h.PostReferenceAnalyze)
+	mux.HandleFunc("POST /api/reference/settings/import", h.PostReferenceSettingsImport)
+
 	mux.HandleFunc("POST /api/outline/generate", h.PostOutlineGenerate)
 	mux.HandleFunc("POST /api/outline/confirm", h.PostOutlineConfirm)
 	mux.HandleFunc("POST /api/outline/revise", h.PostOutlineRevise)
@@ -197,20 +203,24 @@ func (h *Handlers) GetProjects(w http.ResponseWriter, r *http.Request) {
 
 		// Project language: read config.json's "language" field; default zh for old projects.
 		lang := LangZH
+		projectType := ProjectTypeOriginal
 		if data, err := os.ReadFile(filepath.Join(projectDir, "config.json")); err == nil {
 			var probe struct {
-				Language string `json:"language"`
+				Language    string `json:"language"`
+				ProjectType string `json:"project_type"`
 			}
 			if json.Unmarshal(data, &probe) == nil && probe.Language != "" {
 				lang = NormalizeLanguage(probe.Language)
 			}
+			projectType = NormalizeProjectType(probe.ProjectType)
 		}
 
 		info := map[string]string{
-			"name":     name,
-			"phase":    phase,
-			"title":    title,
-			"language": lang,
+			"name":         name,
+			"phase":        phase,
+			"title":        title,
+			"language":     lang,
+			"project_type": projectType,
 		}
 
 		// Get mod time for sorting
@@ -231,8 +241,9 @@ func (h *Handlers) GetProjects(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) PostProject(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string `json:"name"`
-		Language string `json:"language"`
+		Name        string `json:"name"`
+		Language    string `json:"language"`
+		ProjectType string `json:"project_type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
 		h.writeErrorReq(w, r, http.StatusBadRequest, "missing_project_name")
@@ -241,6 +252,7 @@ func (h *Handlers) PostProject(w http.ResponseWriter, r *http.Request) {
 
 	name := strings.TrimSpace(req.Name)
 	lang := NormalizeLanguage(req.Language)
+	projectType := NormalizeProjectType(req.ProjectType)
 
 	for _, c := range name {
 		if c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' {
@@ -264,6 +276,7 @@ func (h *Handlers) PostProject(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll(sessionsDir, 0755)
 
 	cfg := DefaultConfigForLang(lang)
+	cfg.ProjectType = projectType
 	if err := saveConfig(filepath.Join(projectDir, "config.json"), cfg); err != nil {
 		h.writeErrorReq(w, r, http.StatusInternalServerError, "init_project_config_failed", err.Error())
 		return
@@ -273,7 +286,7 @@ func (h *Handlers) PostProject(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("项目「%s」创建成功", name),
 		fmt.Sprintf("Project \"%s\" created", name),
 	)
-	h.writeJSON(w, http.StatusOK, map[string]string{"name": name, "language": lang})
+	h.writeJSON(w, http.StatusOK, map[string]string{"name": name, "language": lang, "project_type": projectType})
 }
 
 func (h *Handlers) GetProjectCurrent(w http.ResponseWriter, r *http.Request) {
@@ -282,6 +295,7 @@ func (h *Handlers) GetProjectCurrent(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]string{"name": h.projectName}
 	if h.projectName != "" && h.cfg != nil {
 		resp["language"] = NormalizeLanguage(h.cfg.Language)
+		resp["project_type"] = NormalizeProjectType(h.cfg.ProjectType)
 	}
 	h.writeJSON(w, http.StatusOK, resp)
 }
@@ -305,7 +319,13 @@ func (h *Handlers) PostProjectSelect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.writeJSON(w, http.StatusOK, map[string]string{"name": h.projectName})
+	projectType := ProjectTypeOriginal
+	lang := LangZH
+	if h.cfg != nil {
+		projectType = NormalizeProjectType(h.cfg.ProjectType)
+		lang = NormalizeLanguage(h.cfg.Language)
+	}
+	h.writeJSON(w, http.StatusOK, map[string]string{"name": h.projectName, "language": lang, "project_type": projectType})
 }
 
 func (h *Handlers) DeleteProject(w http.ResponseWriter, r *http.Request) {

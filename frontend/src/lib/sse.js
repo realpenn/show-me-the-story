@@ -1,4 +1,4 @@
-import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions } from './stores.js';
+import { addLog, addToast, config, progress, taskRunning, streamingContent, streamingChapterIdx, streamCharCount, continueAnalysis, currentChatSession, settings, chatSessions, lastFailedTask, currentTaskName, logEntries, postprocess, foreshadowSuggestions, foreshadowShowSuggestions, referenceState } from './stores.js';
 import { api } from './api.js';
 import { getLocale, translate, translateServerMessage } from './i18n/index.js';
 
@@ -134,6 +134,13 @@ export function connectSSE() {
       api('GET', '/api/postprocess').then(p => postprocess.set(p)).catch(() => {});
     }
 
+    if (d.task === 'reference_import' || d.task === 'reference_analyze') {
+      api('GET', '/api/reference').then(r => referenceState.set(r)).catch(() => {});
+      if (d.task === 'reference_analyze') {
+        api('GET', '/api/settings').then(s => settings.set(s)).catch(() => {});
+      }
+    }
+
     if (d.task === 'chat_message') {
       let sessionId = null;
       currentChatSession.update(s => {
@@ -181,6 +188,11 @@ export function connectSSE() {
   eventSource.addEventListener('continue_analysis', e => {
     const d = JSON.parse(e.data);
     continueAnalysis.set(d);
+  });
+
+  eventSource.addEventListener('reference_update', e => {
+    const d = JSON.parse(e.data);
+    referenceState.set(d);
   });
 
   eventSource.addEventListener('settings_reconciled', e => {

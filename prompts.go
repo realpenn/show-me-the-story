@@ -441,4 +441,80 @@ var DefaultPromptsZH = PromptsConfig{
 【输出格式】
 只输出 JSON，不要其他文字：
 {"items": [{"chapter_num": 1, "type": "logic", "priority": "P0", "feedback": "具体修改意见", "selected": true}]}`,
+
+	ReferenceChapterAnalysis: `你正在分析一部已获授权、将用于同结构改写的参考小说。请把当前原文章节压缩成结构化分析，供后续改写方案和逐章重写使用。
+
+【章节】
+第 {{.ChapterNum}} 章：{{.ChapterTitle}}
+
+{{.PartNote}}
+
+【原文章节正文】
+{{.ChapterContent}}
+
+请严格输出 JSON，不要添加其他文字：
+{
+  "num": {{.ChapterNum}},
+  "title": "章节标题",
+  "summary": "本章摘要，保留事件因果与人物状态，200-400字",
+  "key_events": ["关键事件1", "关键事件2"],
+  "scene_function": "本章在全书结构中的功能，如铺垫/升级冲突/阶段高潮/反转/收束",
+  "foreshadow_payoffs": ["本章埋设或回收的伏笔"],
+  "emotional_curve": "本章情绪曲线",
+  "ending_route": "本章结尾把故事推向何处",
+  "characters": ["本章出场或被重点影响的人物"]
+}
+
+要求：
+1. 只分析结构、功能、关系推进和状态变化，不复述原文句段
+2. 不要摘抄连续原句，不保留标志性表达
+3. 若这是分块分析，只分析本分块实际出现的内容`,
+
+	ReferenceBookAnalysis: `你正在为一部已获授权的参考小说建立改写用分析档案。请根据章节分析，提取全书级结构、主要设定、角色、组织和关系线。
+
+【参考书元数据】
+{{.ReferenceMetadata}}
+
+【章节数】{{.ChapterCount}}
+
+【章节结构化分析】
+{{.ChapterAnalyses}}
+
+请严格输出 JSON，不要添加其他文字：
+{
+  "title": "参考书标题",
+  "story_type": "题材/类型",
+  "synopsis": "全书梗概，500-1000字",
+  "writing_style": "原作可观察的叙事风格概括，供改写时避开原句但理解节奏",
+  "core_setting": "世界观、金手指、核心规则和主线驱动力",
+  "global_notes": "改写时必须理解的结构要点、高潮分布、结局路线",
+  "settings": {
+    "characters": [
+      {
+        "name": "人物名",
+        "age": "",
+        "appearance": "",
+        "personality": "性格与行为模式",
+        "background": "背景",
+        "motivation": "动机",
+        "abilities": "能力/资源",
+        "notes": "改写时需延续的人物功能"
+      }
+    ],
+    "worldview": [
+      {"category": "规则/地理/势力/历史/其他", "name": "设定名", "description": "说明", "tags": ""}
+    ],
+    "organizations": [
+      {"name": "组织名", "type": "类型", "description": "说明", "member_names": ["成员名"]}
+    ],
+    "relations": [
+      {"source_name": "人物或组织A", "source_type": "character", "target_name": "人物或组织B", "target_type": "character", "label": "关系"}
+    ]
+  }
+}
+
+要求：
+1. 这是参考分析，不是新稿创作；不要提出改写方案
+2. 角色和设定应服务于后续同结构改写，宁可少而准
+3. 不要输出原文句段或标志性表达`,
 }

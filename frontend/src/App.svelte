@@ -1,6 +1,6 @@
 <script>
   import { currentPage } from './lib/router.js';
-  import { progress, taskRunning, contextPage, toastStore, currentProject, projectLanguage } from './lib/stores.js';
+  import { progress, taskRunning, contextPage, toastStore, currentProject, projectLanguage, currentProjectType, referenceState } from './lib/stores.js';
   import { connectSSE } from './lib/sse.js';
   import { api } from './lib/api.js';
   import { onMount } from 'svelte';
@@ -12,6 +12,7 @@
   import Relations from './pages/Relations.svelte';
   import Skills from './pages/Skills.svelte';
   import Foreshadows from './pages/Foreshadows.svelte';
+  import Reference from './pages/Reference.svelte';
   import ChatPanel from './components/ChatPanel.svelte';
   import ConfirmModal from './components/ConfirmModal.svelte';
 
@@ -26,6 +27,7 @@
       const cur = await api('GET', '/api/projects/current');
       if (cur.name) {
         currentProject.set(cur.name);
+        currentProjectType.set(cur.project_type || 'original');
         if (cur.language) {
           projectLanguage.set(cur.language);
           // First time opening this project this session: align UI with project language.
@@ -33,6 +35,9 @@
           setLocale(cur.language);
         }
         try { const p = await api('GET', '/api/progress'); progress.set(p); } catch (e) {}
+        if ((cur.project_type || 'original') === 'rewrite') {
+          try { referenceState.set(await api('GET', '/api/reference')); } catch (e) {}
+        }
       }
     } catch (e) {}
   });
@@ -42,6 +47,9 @@
         : $progress.phase === 'writing' ? $t('app.phase.writing')
         : $progress.phase)
     : $t('app.phase.unstarted');
+  $: if ($currentProject && $currentProjectType === 'rewrite' && !['config', 'reference', 'relations', 'skills'].includes($currentPage)) {
+    window.location.hash = '#reference';
+  }
   $: chapterStats = (() => {
     const chs = $progress?.chapters || [];
     if (chs.length === 0) return '';
@@ -55,6 +63,8 @@
 
   function backToProjects() {
     currentProject.set(null);
+    currentProjectType.set('original');
+    referenceState.set(null);
   }
 
   function toggleLocale() {
@@ -68,6 +78,9 @@
     <span class="text-lg font-semibold">{$t('app.title')}</span>
     {#if $currentProject}
       <span class="badge badge-sm badge-outline">{$currentProject}</span>
+      <span class="badge badge-sm badge-info">
+        {$currentProjectType === 'rewrite' ? $t('projects.type.rewriteShort') : $t('projects.type.originalShort')}
+      </span>
       <span class="badge badge-sm badge-accent uppercase" title={$projectLanguage === 'en' ? 'English' : '中文'}>
         {$projectLanguage === 'en' ? 'EN' : 'ZH'}
       </span>
@@ -111,14 +124,21 @@
       <div class="flex flex-col w-1/2 min-w-[320px] border-r border-base-content/10 shrink-0">
         <!-- Nav -->
         <nav class="flex bg-base-200 border-b border-base-content/10 px-3 py-2 shrink-0 gap-1">
-          {#each [
-            ['config', '⚙️', 'nav.config'],
-            ['outline', '📝', 'nav.outline'],
-            ['writing', '✍️', 'nav.writing'],
-            ['foreshadows', '🔗', 'nav.foreshadows'],
-            ['relations', '🕸️', 'nav.relations'],
-            ['skills', '🧩', 'nav.skills']
-          ] as [page, icon, labelKey]}
+          {#each ($currentProjectType === 'rewrite'
+            ? [
+                ['config', '⚙️', 'nav.config'],
+                ['reference', '📚', 'nav.reference'],
+                ['relations', '🕸️', 'nav.relations'],
+                ['skills', '🧩', 'nav.skills']
+              ]
+            : [
+                ['config', '⚙️', 'nav.config'],
+                ['outline', '📝', 'nav.outline'],
+                ['writing', '✍️', 'nav.writing'],
+                ['foreshadows', '🔗', 'nav.foreshadows'],
+                ['relations', '🕸️', 'nav.relations'],
+                ['skills', '🧩', 'nav.skills']
+              ]) as [page, icon, labelKey]}
             <button
               class="btn btn-sm text-sm px-4 gap-1.5 {$currentPage === page ? 'btn-primary' : 'btn-ghost'}"
               on:click={() => window.location.hash = '#' + page}
@@ -132,6 +152,8 @@
         <main class="flex-1 overflow-y-auto p-4">
           {#if $currentPage === 'config'}
             <Config {sendToChat} />
+          {:else if $currentPage === 'reference'}
+            <Reference />
           {:else if $currentPage === 'outline'}
             <Outline {sendToChat} />
           {:else if $currentPage === 'writing'}

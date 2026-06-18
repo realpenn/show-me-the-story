@@ -10,6 +10,8 @@ export const currentTaskName = writable(null);
 
 export const currentProject = writable(null);
 export const projects = writable([]);
+export const currentProjectType = writable('original');
+export const referenceState = writable(null);
 
 // Language of the currently loaded novel project (immutable per project).
 // Drives AI prompt language, generated prose language and built-in skill filter.
