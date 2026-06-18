@@ -1745,6 +1745,10 @@ func (h *Handlers) PostRewritePlanGenerate(w http.ResponseWriter, r *http.Reques
 	if !h.ensureRewriteProject(w) {
 		return
 	}
+	if h.rewritePlan != nil && h.rewritePlan.Status == RewritePlanStatusConfirmed && rewriteHasWrittenChapters(h.state) {
+		h.writeError(w, http.StatusConflict, "改编方案已确认且已有新稿章节，重新生成会覆盖已确认方案与已写章节的对应关系。如需重做，请先重置写作进度。")
+		return
+	}
 	if !h.tryStartTask() {
 		h.writeError(w, http.StatusConflict, "有任务正在运行，请等待完成")
 		return

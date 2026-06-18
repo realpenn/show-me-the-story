@@ -369,6 +369,21 @@ func ValidateRewritePlanMappings(plan *RewritePlan, reference *ReferenceBook) er
 	return nil
 }
 
+// rewriteHasWrittenChapters reports whether any target chapter already has
+// generated content or is in a writing/review/accepted state. Used both by the
+// confirmation gate and to block destructive plan regeneration.
+func rewriteHasWrittenChapters(state *Progress) bool {
+	if state == nil {
+		return false
+	}
+	for _, ch := range state.Chapters {
+		if ch.Content != "" || ch.Status == StatusAccepted || ch.Status == StatusReview || ch.Status == StatusWriting {
+			return true
+		}
+	}
+	return false
+}
+
 func ConfirmRewritePlan(plan *RewritePlan, reference *ReferenceBook, cfg *Config, state *Progress, progressPath string, planPath string) error {
 	if err := ValidateRewritePlanMappings(plan, reference); err != nil {
 		return err
@@ -376,10 +391,8 @@ func ConfirmRewritePlan(plan *RewritePlan, reference *ReferenceBook, cfg *Config
 	if state == nil {
 		return fmt.Errorf("进度状态为空")
 	}
-	for _, ch := range state.Chapters {
-		if ch.Content != "" || ch.Status == StatusAccepted || ch.Status == StatusReview || ch.Status == StatusWriting {
-			return fmt.Errorf("已存在写作中或已完成的新稿章节，不能直接覆盖改编方案骨架")
-		}
+	if rewriteHasWrittenChapters(state) {
+		return fmt.Errorf("已存在写作中或已完成的新稿章节，不能直接覆盖改编方案骨架")
 	}
 
 	state.Title = defaultString(plan.Title, defaultRewriteTitle(reference.Title))
