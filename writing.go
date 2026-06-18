@@ -570,7 +570,7 @@ func generateRewriteChapterContentStream(ctx context.Context, apiCfg *APIConfig,
 		snapshot = &cfg.Story
 	}
 
-	chapterPlanJSON := mustMarshalIndent(chapterPlan)
+	chapterPlanJSON := rewriteChapterPlanForPrompt(chapterPlan)
 	referenceAnalysis := formatReferenceAnalysisForRewrite(analysis, chapterPlan.SourceChapterNums)
 	requestsText := formatRewriteRequestsForChapter(plan, state, requests, *chapterPlan, ch.Num, lang)
 	constraints := formatRewritePlanConstraints(plan, lang)
@@ -656,7 +656,7 @@ func generateRewriteChapterContentStreamWithRetryLog(ctx context.Context, apiCfg
 func runRewriteChapterChecks(ctx context.Context, apiCfg *APIConfig, cfg *Config, state *Progress, idx int, analysis *ReferenceAnalysis, plan *RewritePlan, chapterPlan *RewriteChapterPlan, requests []RewriteRequest, sourceText string, content string, attempt int, logger *LogBroadcaster) (RewriteCheckResult, error) {
 	ch := state.Chapters[idx]
 	lang := cfg.Language
-	chapterPlanJSON := mustMarshalIndent(chapterPlan)
+	chapterPlanJSON := rewriteChapterPlanForPrompt(chapterPlan)
 	referenceAnalysis := formatReferenceAnalysisForRewrite(analysis, chapterPlan.SourceChapterNums)
 	requestsText := formatRewriteRequestsForChapter(plan, state, requests, *chapterPlan, ch.Num, lang)
 	constraints := formatRewritePlanConstraints(plan, lang)
@@ -817,6 +817,43 @@ func buildMappedReferenceSourceText(projectDir string, reference *ReferenceBook,
 		parts = append(parts, content)
 	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// rewriteChapterPlanForPrompt serializes only the planning intent of a chapter
+// plan for prompt injection. Runtime/check fields (last_check_result,
+// needs_review/needs_rewrite, review_reasons) are deliberately excluded so the
+// model never sees stale check output echoed back inside its own "plan" on
+// retries — RetryFeedback already carries the actionable issues.
+func rewriteChapterPlanForPrompt(ch *RewriteChapterPlan) string {
+	if ch == nil {
+		return "{}"
+	}
+	view := struct {
+		Num                  int      `json:"num"`
+		Title                string   `json:"title"`
+		Outline              string   `json:"outline"`
+		SourceChapterNums    []int    `json:"source_chapter_nums"`
+		MappingType          string   `json:"mapping_type"`
+		PreservedEvents      []string `json:"preserved_events,omitempty"`
+		ChangedEvents        []string `json:"changed_events,omitempty"`
+		ForbiddenClosePoints []string `json:"forbidden_close_points,omitempty"`
+		RequestIDs           []string `json:"request_ids,omitempty"`
+		UseOriginalFullText  bool     `json:"use_original_full_text"`
+		FullTextReason       string   `json:"full_text_reason,omitempty"`
+	}{
+		Num:                  ch.Num,
+		Title:                ch.Title,
+		Outline:              ch.Outline,
+		SourceChapterNums:    ch.SourceChapterNums,
+		MappingType:          ch.MappingType,
+		PreservedEvents:      ch.PreservedEvents,
+		ChangedEvents:        ch.ChangedEvents,
+		ForbiddenClosePoints: ch.ForbiddenClosePoints,
+		RequestIDs:           ch.RequestIDs,
+		UseOriginalFullText:  ch.UseOriginalFullText,
+		FullTextReason:       ch.FullTextReason,
+	}
+	return mustMarshalIndent(view)
 }
 
 func formatReferenceAnalysisForRewrite(analysis *ReferenceAnalysis, sourceNums []int) string {

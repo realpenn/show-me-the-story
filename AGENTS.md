@@ -35,7 +35,7 @@ task dev:frontend                     # 启动 Vite dev server（热重载，端
 task dev                              # 编译并启动 Go 后端
 ```
 
-编译前务必确认 `go build` 无报错。项目无测试框架，编译通过即为基本验证。
+编译前务必确认 `go test ./...` 与 `go build` 无报错；当前已有相似度检测单元测试，编译通过 + 测试通过为基本验证。
 
 ## 架构概览
 
@@ -83,6 +83,7 @@ task dev                              # 编译并启动 Go 后端
 | `reference.go` | 改写项目阶段 1：`ReferenceBook` / `ReferenceChapter` / `ReferenceAnalysis` / `ReferenceChapterAnalysis` / `ReferenceSettingsCandidate` 结构体，`LoadReferenceBook`/`SaveReferenceBook`、`LoadReferenceAnalysis`/`SaveReferenceAnalysis`，`BuildReferenceBookFromContent`（复用 `splitContentByChapters` 正则拆章并保存 `reference/Chapter_XXX.txt`）、`ReplaceReferenceChapters`（按编辑列表直接落盘，避免标题非标准时被重新合并）、`AnalyzeReferenceBook`（逐章/分块分析 + 全书合并）、`ApplyReferenceSettingsImport`（空设定自动导入，已有设定候选需确认） |
 | `rewrite.go` | 改写项目阶段 2-3：`RewriteRequest` / `RewritePlan` / `ChapterMapping` / `RewriteChapterPlan` / `RewriteRequestImpact` / `RewriteCheckResult` 结构体，`LoadRewriteRequests`/`SaveRewriteRequests`、`LoadRewritePlan`/`SaveRewritePlan`，`GenerateRewritePlanAction`（参考分析 + 改写意见 → 分段规划要点 → 改编总方案 JSON）、`ValidateRewritePlanMappings`（每个原文章节至少覆盖一次，校验多对多映射）、`ConfirmRewritePlan`（确认门：生成 `state.Chapters` 新稿 pending 骨架，`Phase="writing"`，不覆盖已有正文/审核/已确认章节）、`UpsertRewriteCheckResult`（保存三项检查结果与章节需复核状态）、`ApplyConfirmedRewriteRequestChange`（方案确认后新增/修改/删除意见：已写章标记需复核，未写章计划追加约束） |
 | `similarity.go` | 改写项目贴近原文确定性检查：`AssessSimilarity` 按字符 n-gram、句子重合、最长连续片段检测源文/新稿文本相似度，输出 `SimilarityResult`、风险等级、阈值与高风险片段；中文按字符/句子级处理，不依赖空格分词或外部库 |
+| `similarity_test.go` | `similarity.go` 的单元测试：覆盖中文无空格文本、逐字复用、严格阈值不弱于普通阈值、长公共片段升级、长文本 LCS 截断、短文本 n-gram 等边界 |
 | `reconcile.go` | `ReconcileSettingsAction`、`regeneratePendingOutlines`、设定协调逻辑 |
 | `settings.go` | `Character`、`WorldviewEntry`、`Organization`、`Relation`、`ProjectSettings` 结构体，`LoadProjectSettings`、`SaveProjectSettings`、`buildCharacterContext`、`buildWorldviewContext` |
 | `skills.go` | `Skill`、`SkillConfig` 结构体，`LoadBuiltinSkills`、`LoadProjectSkills`、`MergeSkills`、`GetEnabledSkills`、`GetEnabledSkillsByCategory`、`FormatSkillsContent`，`//go:embed embeds/skills` |
