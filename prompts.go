@@ -517,4 +517,81 @@ var DefaultPromptsZH = PromptsConfig{
 1. 这是参考分析，不是新稿创作；不要提出改写方案
 2. 角色和设定应服务于后续同结构改写，宁可少而准
 3. 不要输出原文句段或标志性表达`,
+
+	RewritePlanChunkAnalysis: `你正在为一部已获授权的同结构改写项目做分段策划。以下是全部材料中的第 {{.ChunkIndex}} / {{.ChunkTotal}} 段。
+
+【分段材料】
+{{.Material}}
+
+请输出本段的改编规划要点（Markdown 即可），用于稍后合并生成完整改编总方案。必须覆盖：
+1. 本段涉及的原文章节编号与结构功能
+2. 相关用户改写意见及其影响
+3. 需要保留的事件功能、关系推进、伏笔功能
+4. 需要变化的剧情、角色、设定、关系线
+5. 禁止贴近原文的表达/标志性桥段提示
+
+不要改写正文，不要摘抄原文句段。`,
+
+	RewritePlanGeneration: `你正在生成一份“授权参考小说同结构改写”的改编总方案。目标：保持原文结构、事件功能、人物关系推进与章节脉络基本一致，但新稿表达必须全部换新，不复用原文句段与标志性表达。
+
+【参考书】{{.ReferenceTitle}}
+【原文章节数】{{.SourceChapterCount}}
+
+【参考书梗概】
+{{.ReferenceSynopsis}}
+
+【参考书核心设定】
+{{.ReferenceCoreSetting}}
+
+【用户改写意见】
+{{.RewriteRequests}}
+
+【规划材料】
+{{.PlanningMaterial}}
+
+请严格输出 JSON，不要添加其他文字，结构如下：
+{
+  "title": "新稿标题",
+  "global_direction": "全书改写总方向，说明整体保留与变化",
+  "core_premise": "新稿核心设定/主线版本",
+  "style_guide": "新稿表达风格要求，强调不复用原文表达",
+  "character_changes": [
+    {"object": "角色名", "before": "参考原作功能", "after": "新稿变化", "affected_chapters": [1, 2]}
+  ],
+  "setting_changes": [
+    {"object": "设定名", "before": "参考原作规则", "after": "新稿规则", "affected_chapters": [1]}
+  ],
+  "relationship_changes": [
+    {"object": "A-B", "before": "参考原作关系", "after": "新稿关系推进", "affected_chapters": [3, 4]}
+  ],
+  "request_impacts": [
+    {"request_id": "rr_1", "summary": "该意见如何落实", "affected_chapters": [1, 2], "affected_objects": ["角色/设定/关系"]}
+  ],
+  "mappings": [
+    {"target_chapter_num": 1, "source_chapter_nums": [1], "mapping_type": "one_to_one"}
+  ],
+  "chapters": [
+    {
+      "num": 1,
+      "title": "新稿章节标题",
+      "outline": "本章新稿大纲：保留原章节结构功能，但写出用户意见造成的变化",
+      "source_chapter_nums": [1],
+      "mapping_type": "one_to_one",
+      "preserved_events": ["保留的事件功能，不写原句"],
+      "changed_events": ["改写变化"],
+      "forbidden_close_points": ["不得复用的标志性表达/桥段处理方式"],
+      "request_ids": ["rr_1"],
+      "use_original_full_text": false,
+      "full_text_reason": ""
+    }
+  ],
+  "constraints": ["全篇一致性约束"]
+}
+
+硬性要求：
+1. 章节映射以新稿章节为中心，允许合并/拆分：merge = 一个新稿章节覆盖多个原文章节；split = 多个新稿章节共享同一个原文章节
+2. 每个原文章节必须至少出现在一个 chapters[].source_chapter_nums 中，禁止漏章
+3. 普通章节 use_original_full_text 必须为 false；只有用户明确要求重点参考原文全文时才可设为 true，并填写 full_text_reason
+4. request_impacts 必须覆盖每条用户意见，说明影响章节/角色/设定/关系线
+5. 不要输出正文，不要摘抄原文句段或标志性表达`,
 }

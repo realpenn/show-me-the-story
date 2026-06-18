@@ -507,4 +507,81 @@ Rules:
 1. This is reference analysis, not rewrite planning; do not propose the new manuscript.
 2. Characters and settings should serve later same-structure rewriting: prefer concise, high-signal entries.
 3. Do not output source passages or signature expressions.`,
+
+	RewritePlanChunkAnalysis: `You are planning one chunk of an authorised same-structure rewrite project. This is chunk {{.ChunkIndex}} / {{.ChunkTotal}} of the full material.
+
+[Chunk material]
+{{.Material}}
+
+Output planning notes for this chunk (Markdown is fine) so they can later be merged into the complete adaptation master plan. Cover:
+1. Source chapter numbers and their structural functions in this chunk.
+2. Relevant rewrite requests and their effects.
+3. Event functions, relationship movement, and foreshadow functions that should be preserved.
+4. Plot, character, setting, or relationship changes required by the requests.
+5. Source-proximity risks: expressions or signature handling that must not be reused.
+
+Do not rewrite prose. Do not quote source passages.`,
+
+	RewritePlanGeneration: `You are generating the adaptation master plan for an authorised same-structure rewrite. Goal: preserve the source structure, event functions, relationship progression and chapter spine, while making the new manuscript's expression completely new and not reusing source sentences or signature phrasing.
+
+[Reference title] {{.ReferenceTitle}}
+[Source chapter count] {{.SourceChapterCount}}
+
+[Reference synopsis]
+{{.ReferenceSynopsis}}
+
+[Reference core setting]
+{{.ReferenceCoreSetting}}
+
+[User rewrite requests]
+{{.RewriteRequests}}
+
+[Planning material]
+{{.PlanningMaterial}}
+
+Output strict JSON only:
+{
+  "title": "new manuscript title",
+  "global_direction": "overall rewrite direction: what stays structurally and what changes",
+  "core_premise": "new manuscript core premise/setting/mainline",
+  "style_guide": "new expression style, emphasising no source phrasing reuse",
+  "character_changes": [
+    {"object": "character name", "before": "source function", "after": "new-manuscript change", "affected_chapters": [1, 2]}
+  ],
+  "setting_changes": [
+    {"object": "setting name", "before": "source rule", "after": "new rule", "affected_chapters": [1]}
+  ],
+  "relationship_changes": [
+    {"object": "A-B", "before": "source relationship", "after": "new relationship progression", "affected_chapters": [3, 4]}
+  ],
+  "request_impacts": [
+    {"request_id": "rr_1", "summary": "how this request is implemented", "affected_chapters": [1, 2], "affected_objects": ["character/setting/relation"]}
+  ],
+  "mappings": [
+    {"target_chapter_num": 1, "source_chapter_nums": [1], "mapping_type": "one_to_one"}
+  ],
+  "chapters": [
+    {
+      "num": 1,
+      "title": "new chapter title",
+      "outline": "new chapter outline: preserve the source structural function while applying the requested changes",
+      "source_chapter_nums": [1],
+      "mapping_type": "one_to_one",
+      "preserved_events": ["event function to preserve, without source wording"],
+      "changed_events": ["rewrite change"],
+      "forbidden_close_points": ["signature expression / handling that must not be reused"],
+      "request_ids": ["rr_1"],
+      "use_original_full_text": false,
+      "full_text_reason": ""
+    }
+  ],
+  "constraints": ["whole-book consistency constraint"]
+}
+
+Hard requirements:
+1. Chapter mapping is target-centered and may merge/split: merge = one target chapter covers multiple source chapters; split = multiple target chapters share the same source chapter.
+2. Every source chapter must appear in at least one chapters[].source_chapter_nums entry; never omit a source chapter silently.
+3. Ordinary chapters must set use_original_full_text to false; only set true when the user explicitly requests full-source reference for a focus chapter, and then fill full_text_reason.
+4. request_impacts must cover every user request and explain affected chapters/characters/settings/relationships.
+5. Do not output prose. Do not quote source sentences or signature expressions.`,
 }

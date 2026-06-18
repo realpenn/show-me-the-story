@@ -77,6 +77,8 @@ type PromptsConfig struct {
 	BookRoadmap                   string `json:"book_roadmap"`
 	ReferenceChapterAnalysis      string `json:"reference_chapter_analysis"`
 	ReferenceBookAnalysis         string `json:"reference_book_analysis"`
+	RewritePlanChunkAnalysis      string `json:"rewrite_plan_chunk_analysis"`
+	RewritePlanGeneration         string `json:"rewrite_plan_generation"`
 }
 
 func DefaultAPIConfig() *APIConfig {
@@ -249,6 +251,12 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	}
 	if p.ReferenceBookAnalysis == "" {
 		p.ReferenceBookAnalysis = defaults.ReferenceBookAnalysis
+	}
+	if p.RewritePlanChunkAnalysis == "" {
+		p.RewritePlanChunkAnalysis = defaults.RewritePlanChunkAnalysis
+	}
+	if p.RewritePlanGeneration == "" {
+		p.RewritePlanGeneration = defaults.RewritePlanGeneration
 	}
 }
 
