@@ -50,7 +50,7 @@
         : $progress.phase === 'writing' ? $t('app.phase.writing')
         : $progress.phase)
     : $t('app.phase.unstarted');
-  $: if ($currentProject && $currentProjectType === 'rewrite' && !['config', 'reference', 'rewrite-requests', 'rewrite-plan', 'relations', 'skills'].includes($currentPage)) {
+  $: if ($currentProject && $currentProjectType === 'rewrite' && !['config', 'reference', 'rewrite-requests', 'rewrite-plan', 'writing', 'foreshadows', 'relations', 'skills'].includes($currentPage)) {
     window.location.hash = '#reference';
   }
   $: chapterStats = (() => {
@@ -134,6 +134,8 @@
                 ['reference', '📚', 'nav.reference'],
                 ['rewrite-requests', '🧭', 'nav.rewriteRequests'],
                 ['rewrite-plan', '🧱', 'nav.rewritePlan'],
+                ['writing', '✍️', 'nav.writing'],
+                ['foreshadows', '🔗', 'nav.foreshadows'],
                 ['relations', '🕸️', 'nav.relations'],
                 ['skills', '🧩', 'nav.skills']
               ]

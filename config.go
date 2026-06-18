@@ -79,6 +79,10 @@ type PromptsConfig struct {
 	ReferenceBookAnalysis         string `json:"reference_book_analysis"`
 	RewritePlanChunkAnalysis      string `json:"rewrite_plan_chunk_analysis"`
 	RewritePlanGeneration         string `json:"rewrite_plan_generation"`
+	RewriteChapterWriting         string `json:"rewrite_chapter_writing"`
+	RewriteComplianceCheck        string `json:"rewrite_compliance_check"`
+	StructureFidelityCheck        string `json:"structure_fidelity_check"`
+	ClosenessCheck                string `json:"closeness_check"`
 }
 
 func DefaultAPIConfig() *APIConfig {
@@ -257,6 +261,18 @@ func (p *PromptsConfig) applyDefaults(lang string) {
 	}
 	if p.RewritePlanGeneration == "" {
 		p.RewritePlanGeneration = defaults.RewritePlanGeneration
+	}
+	if p.RewriteChapterWriting == "" {
+		p.RewriteChapterWriting = defaults.RewriteChapterWriting
+	}
+	if p.RewriteComplianceCheck == "" {
+		p.RewriteComplianceCheck = defaults.RewriteComplianceCheck
+	}
+	if p.StructureFidelityCheck == "" {
+		p.StructureFidelityCheck = defaults.StructureFidelityCheck
+	}
+	if p.ClosenessCheck == "" {
+		p.ClosenessCheck = defaults.ClosenessCheck
 	}
 }
 
